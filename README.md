@@ -1,6 +1,6 @@
 # ghidra-re
 
-An [Agent Skill](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills/overview) for reverse engineering binaries with [Ghidra MCP](https://github.com/xebyte-io/ghidra-mcp) (193 tools via Python bridge).
+An [Agent Skill](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills/overview) for reverse engineering binaries with [Ghidra MCP](https://github.com/bethington/ghidra-mcp) (193 tools via Python bridge).
 
 ## What it does
 
@@ -16,7 +16,7 @@ Gives Claude structured workflows for binary analysis in Ghidra's headless mode:
 ## Requirements
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or any agent supporting the [Agent Skills spec](https://agentskills.io/specification)
-- [Ghidra MCP server](https://github.com/xebyte-io/ghidra-mcp) running in headless mode (Python bridge + Java headless server on port 8089)
+- [Ghidra MCP server](https://github.com/bethington/ghidra-mcp) running in headless mode (Python bridge + Java headless server on port 8089)
 - Ghidra 12.0.3 with Java 21 LTS
 
 ## Installation
