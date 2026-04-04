@@ -1,15 +1,12 @@
 ---
 name: ghidra-re
-description: >-
-  Use this skill whenever the user wants to reverse engineer, decompile, or analyze
-  binaries using Ghidra MCP tools (193 tools via Python bridge). This includes
-  function documentation, data type investigation, orphaned code discovery, call graph
-  analysis, struct creation, variable renaming, and binary reconnaissance. Use ANY time
-  the user mentions Ghidra, decompilation, disassembly, binary analysis, DLL/EXE
-  investigation, function renaming, or malware analysis. Also trigger when the user says
-  "document functions", "what does this binary do", "find hidden functions", "create a
-  struct", "trace call graph", or references specific function addresses like 0x401000.
-  Do NOT use for source-level debugging, dynamic analysis, or non-Ghidra RE tools.
+description: Reverse engineer, decompile, and analyze binaries using 193 Ghidra MCP tools. Covers function documentation, data type investigation, orphaned code discovery, call graph analysis, struct creation, variable renaming, binary reconnaissance, and malware analysis. Use when the user mentions Ghidra, decompilation, disassembly, binary analysis, DLL/EXE investigation, function renaming, malware analysis, or references function addresses like 0x401000. Do NOT use for source-level debugging, dynamic analysis, or non-Ghidra RE tools.
+allowed-tools: mcp__ghidra__* Bash(curl:*)
+when_to_use: "Use when the user wants to reverse engineer or analyze a binary with Ghidra. Examples: 'analyze this binary', 'decompile this function', 'what does this DLL do', 'document all functions', 'find hidden functions', 'create a struct', 'trace the call graph', 'check for malware', 'rename this function at 0x401000'."
+argument-hint: "[function address, binary path, or task description]"
+metadata:
+  author: coffeegrind123
+  version: "1.1"
 ---
 
 # Ghidra MCP Reverse Engineering
@@ -24,7 +21,7 @@ description: >-
 
 4. **Phantom variables**: `extraout_*`, `in_*` variables with `undefined` types are decompiler artifacts from register splitting. They cannot be renamed or retyped. Note in plate comment Special Cases and skip.
 
-5. **Hungarian notation**: All variable and global renames use Hungarian prefixes (see [reference/hungarian-notation.md](reference/hungarian-notation.md)). Types must be set BEFORE renaming — the prefix must match the actual Ghidra type, not the decompiler's display type.
+5. **Hungarian notation**: All variable and global renames use Hungarian prefixes. Types must be set BEFORE renaming — the prefix must match the actual Ghidra type, not the decompiler's display type. Read [reference/hungarian-notation.md](reference/hungarian-notation.md) when you need the type-to-prefix table.
 
 6. **Name collision checking**: Always `search_functions_enhanced` with the chosen name before `rename_function`. Parallel subagents can independently pick the same name, causing silent overwrites.
 
@@ -82,7 +79,7 @@ After loading:
 1. `run_analysis` — trigger Ghidra auto-analysis
 2. `get_current_program_info` — verify architecture, compiler, format
 
-For all HTTP-only endpoints and headless limitations, read [reference/headless-operations.md](reference/headless-operations.md).
+Read [reference/headless-operations.md](reference/headless-operations.md) if loading binaries or troubleshooting headless server issues.
 
 ## Phase 1: Initial Recon
 
