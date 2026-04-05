@@ -18,6 +18,17 @@ Always use lowercase Ghidra builtins, not Windows SDK types:
 
 Use lowercase when calling `set_local_variable_type`, `apply_data_type`, `create_struct`.
 
+## Struct Field Auto-Prefixing (v5.0.0)
+
+In GhidraMCP v5.0.0, struct field names are **auto-prefixed by the server**. The following tools apply Hungarian prefixes automatically based on field type:
+- `create_struct` — all fields in the initial definition
+- `add_struct_field` — the new field being added
+- `modify_struct_field` — the modified field
+
+Do NOT manually add Hungarian prefixes to struct field names — the server handles it. Passing `dwFlags` when the server expects `Flags` will result in double-prefixed names like `dwdwFlags`.
+
+Variable renames (`rename_variables`, `set_variables`) still require manual Hungarian prefixes. The server validates that the prefix matches the actual type.
+
 ## Type-to-Prefix Mapping
 
 | Ghidra Type | Size | Prefix | Local Example | Global Example |
@@ -77,17 +88,17 @@ Always specify complete declaration:
 ## Workflow
 
 1. `get_function_variables` — discover storage types
-2. Normalize: UINT→uint, DWORD→uint, BYTE→byte
-3. `set_local_variable_type` for undefined storage
+2. Normalize: UINT->uint, DWORD->uint, BYTE->byte
+3. `set_variables` for atomic type+rename (preferred) or `set_local_variable_type` for type-only changes
 4. `get_function_variables` — verify, discover new SSA vars
-5. `rename_variables` with Hungarian prefixes
-6. Verify: prefix matches actual type (dw↔uint, w↔ushort, b↔byte)
+5. If separate rename needed: `rename_variables` with Hungarian prefixes
+6. Verify: prefix matches actual type (dw<->uint, w<->ushort, b<->byte)
 
 ## Common Mismatches (Must Fix)
 
 ```
-Type: uint    + Prefix: b   → WRONG (should be dw)
-Type: ushort  + Prefix: dw  → WRONG (should be w)
-Type: UINT    + any prefix  → WRONG (normalize to uint first)
-Type: undefined4 + Prefix: p → WRONG (set actual type first)
+Type: uint    + Prefix: b   -> WRONG (should be dw)
+Type: ushort  + Prefix: dw  -> WRONG (should be w)
+Type: UINT    + any prefix  -> WRONG (normalize to uint first)
+Type: undefined4 + Prefix: p -> WRONG (set actual type first)
 ```

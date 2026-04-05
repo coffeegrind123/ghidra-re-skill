@@ -1,267 +1,212 @@
-# Ghidra MCP Tool Reference (193 Tools)
+# Ghidra MCP Tool Reference (158 Tools)
 
-## Core Operations (11 tools)
+## Tool Categories from /mcp/schema
+
+v5.0.0 uses dynamic tool discovery via bridge. 152 tools from schema + 6 static bridge tools.
+
+## Analysis (17 tools)
 | Tool | Purpose |
 |------|---------|
-| `check_connection` | Verify MCP connectivity |
-| `get_metadata` | Program metadata and info |
-| `get_version` | Server version information |
-| `get_function_count` | Total function count |
-| `get_entry_points` | Binary entry points |
-| `get_current_address` | Cursor address (GUI only) |
-| `get_current_function` | Function at cursor (GUI only) |
-| `get_current_selection` | Current selection context (GUI only) |
-| `read_memory` | Read raw bytes from memory |
-| `save_program` | Save current program |
-| `exit_ghidra` | Save and exit Ghidra |
-
-## Function Analysis (28 tools)
-| Tool | Purpose |
-|------|---------|
-| `list_functions` | List all functions (paginated) |
-| `list_functions_enhanced` | List with isThunk/isExternal flags |
-| `list_classes` | List namespace/class names |
-| `search_functions_enhanced` | Advanced function search with filters |
-| `decompile_function` | Decompile to C pseudocode |
-| `force_decompile` | Force fresh decompilation (bypass cache) |
-| `batch_decompile` | Batch decompile multiple functions |
-| `get_function_callers` | Get function callers |
-| `get_function_callees` | Get function callees |
-| `get_function_call_graph` | Function relationship graph |
-| `get_full_call_graph` | Complete call graph for program |
-| `get_function_signature` | Get function prototype string |
-| `get_function_hash` | SHA-256 hash of normalized opcodes |
-| `get_bulk_function_hashes` | Paginated bulk hashing with filter |
-| `get_function_jump_targets` | Jump target addresses from disassembly |
-| `get_function_metrics` | Complexity metrics |
-| `get_function_xrefs` | Function cross-references |
+| `analyze_control_flow` | Cyclomatic complexity, loops, branches |
+| `analyze_data_region` | Analyze memory region structure |
+| `analyze_for_documentation` | Analyze function for documentation readiness |
 | `analyze_function_complete` | Comprehensive function analysis |
 | `analyze_function_completeness` | Documentation completeness score |
 | `batch_analyze_completeness` | Batch completeness analysis |
-| `find_similar_functions_fuzzy` | Fuzzy similarity matching |
-| `bulk_fuzzy_match` | Bulk fuzzy match across all functions |
-| `diff_functions` | Diff two functions side by side |
-| `validate_function_prototype` | Validate prototype string |
-| `can_rename_at_address` | Check if address can be renamed |
-| `delete_function` | Delete function at address |
-| `get_function_variables` | Get all function variables with storage types |
-| `get_function_labels` | Get labels in function |
-
-## Memory & Data (14 tools)
-| Tool | Purpose |
-|------|---------|
-| `list_segments` | Memory segments and layout |
-| `list_data_items` | Defined data labels and values |
-| `list_data_items_by_xrefs` | Data items sorted by xref count |
-| `get_function_by_address` | Function at address |
-| `disassemble_function` | Disassembly listing |
-| `disassemble_bytes` | Raw byte disassembly |
-| `get_xrefs_to` | Cross-references to address |
-| `get_xrefs_from` | Cross-references from address |
-| `get_bulk_xrefs` | Bulk cross-reference lookup |
-| `analyze_data_region` | Analyze memory region structure |
-| `inspect_memory_content` | View raw memory content |
 | `detect_array_bounds` | Detect array boundaries |
+| `find_code_gaps` | Find gaps between known functions |
+| `find_dead_code` | Unreachable code detection |
+| `find_next_undefined_function` | Find undefined functions |
+| `find_similar_functions` | Find similar functions by structure |
+| `get_field_access_context` | Field access patterns |
+| `inspect_memory_content` | View raw memory content |
+| `list_analyzers` | List available analyzers |
+| `run_analysis` | Trigger auto-analysis |
 | `search_byte_patterns` | Search for byte patterns |
-| `create_memory_block` | Create a new memory block |
+| `search_functions_enhanced` | Advanced function search with filters |
 
-## Cross-Binary Documentation (6 tools)
+## Comment (6 tools)
 | Tool | Purpose |
 |------|---------|
-| `get_function_documentation` | Export complete function documentation |
-| `apply_function_documentation` | Import documentation to target function |
-| `compare_programs_documentation` | Compare documentation between programs |
-| `build_function_hash_index` | Build persistent JSON hash index |
-| `lookup_function_by_hash` | Find matching functions in index |
-| `propagate_documentation` | Apply docs to all matching instances |
-
-## Data Types & Structures (28 tools)
-| Tool | Purpose |
-|------|---------|
-| `list_data_types` | Available data types |
-| `search_data_types` | Search for data types |
-| `get_data_type_size` | Byte size of a data type |
-| `get_valid_data_types` | Valid Ghidra builtin types |
-| `get_struct_layout` | Detailed field layout of structure |
-| `validate_data_type` | Validate data type syntax |
-| `validate_data_type_exists` | Check if data type exists |
-| `create_struct` | Create custom structure |
-| `add_struct_field` | Add field to structure |
-| `modify_struct_field` | Modify existing field |
-| `remove_struct_field` | Remove field from structure |
-| `create_enum` | Create enumeration |
-| `get_enum_values` | Get enumeration values |
-| `create_array_type` | Create array data type |
-| `create_typedef` | Create typedef alias |
-| `create_union` | Create union data type |
-| `create_pointer_type` | Create pointer data type |
-| `clone_data_type` | Clone data type with new name |
-| `apply_data_type` | Apply type to address |
-| `delete_data_type` | Delete a data type |
-| `consolidate_duplicate_types` | Merge duplicate types |
-| `suggest_field_names` | AI-assisted field name suggestions |
-| `create_data_type_category` | Create category folder |
-| `move_data_type_to_category` | Move type to different category |
-| `list_data_type_categories` | List all categories |
-| `import_data_types` | Import types from GDT/header |
-
-## Symbols & Labels (15 tools)
-| Tool | Purpose |
-|------|---------|
-| `list_imports` | Imported symbols and libraries |
-| `list_exports` | Exported symbols and functions |
-| `list_external_locations` | External location references |
-| `get_external_location` | Specific external location detail |
-| `list_strings` | Extracted strings with analysis |
-| `search_memory_strings` | Search strings by regex/substring |
-| `list_namespaces` | Available namespaces |
-| `list_globals` | Global variables |
-| `create_label` | Create label at address |
-| `batch_create_labels` | Bulk label creation |
-| `delete_label` | Delete label at address |
-| `batch_delete_labels` | Bulk label deletion |
-| `rename_label` | Rename existing label |
-| `rename_or_label` | Rename or create label |
-| `rename_global_variable` | Rename global variable |
-
-## Renaming & Documentation (15 tools)
-| Tool | Purpose |
-|------|---------|
-| `rename_function` | Rename function by name |
-| `rename_function_by_address` | Rename function by address |
-| `rename_data` | Rename data item |
-| `rename_variables` | Rename function variables (dict) |
-| `rename_external_location` | Rename external reference |
-| `batch_rename_function_components` | Bulk renaming |
+| `batch_set_comments` | Bulk comment setting (plate + optional PRE + EOL) |
+| `clear_function_comments` | Clear all comments for function |
+| `get_plate_comment` | Get function plate comment |
 | `set_decompiler_comment` | Set decompiler comment |
 | `set_disassembly_comment` | Set disassembly comment |
 | `set_plate_comment` | Set function plate comment |
-| `get_plate_comment` | Get function plate comment |
-| `batch_set_comments` | Bulk comment setting (plate + PRE + EOL) |
-| `clear_function_comments` | Clear all comments for function |
-| `list_bookmarks` | List all bookmarks |
-| `set_bookmark` | Create or update bookmark |
-| `delete_bookmark` | Delete a bookmark |
 
-## Type System (8 tools)
+## Datatype (29 tools)
 | Tool | Purpose |
 |------|---------|
-| `set_function_prototype` | Set function signature (WIPES plate comments) |
-| `set_local_variable_type` | Set variable type |
-| `set_parameter_type` | Set parameter type |
-| `batch_set_variable_types` | Bulk type setting |
-| `set_variable_storage` | Control variable storage location |
-| `set_function_no_return` | Mark function as non-returning |
-| `clear_instruction_flow_override` | Clear flow override |
-| `list_calling_conventions` | Available calling conventions |
-
-## Ghidra Script Management (9 tools)
-| Tool | Purpose |
-|------|---------|
-| `list_scripts` | List available scripts |
-| `run_script` | Run a script |
-| `list_ghidra_scripts` | List custom Ghidra scripts |
-| `save_ghidra_script` | Save new script |
-| `get_ghidra_script` | Get script contents |
-| `run_ghidra_script` | Execute script by name |
-| `run_script_inline` | Execute inline script code |
-| `update_ghidra_script` | Update existing script |
-| `delete_ghidra_script` | Delete script |
-
-## Multi-Program Support (5 tools)
-| Tool | Purpose |
-|------|---------|
-| `list_open_programs` | List all open programs |
-| `get_current_program_info` | Current program details |
-| `switch_program` | Switch active program |
-| `list_project_files` | List project files |
-| `open_program` | Open program from project |
-
-## Project Lifecycle (5 tools)
-| Tool | Purpose |
-|------|---------|
-| `create_project` | Create new Ghidra project |
-| `open_project` | Open existing project |
-| `close_project` | Close current project |
-| `delete_project` | Delete a project |
-| `list_projects` | List projects in directory |
-
-## Project Organization (4 tools)
-| Tool | Purpose |
-|------|---------|
-| `create_folder` | Create folder in project tree |
-| `move_file` | Move domain file |
-| `move_folder` | Move folder |
-| `delete_file` | Delete domain file |
-
-## Analysis Tools (15 tools)
-| Tool | Purpose |
-|------|---------|
-| `find_next_undefined_function` | Find undefined functions |
-| `find_undocumented_by_string` | Find functions by string reference |
-| `batch_string_anchor_report` | String anchor analysis |
-| `get_assembly_context` | Assembly context |
+| `add_struct_field` | Add field to structure (auto-prefixes Hungarian) |
 | `analyze_struct_field_usage` | Structure field access patterns |
-| `get_field_access_context` | Field access patterns |
-| `create_function` | Create function at address |
-| `analyze_control_flow` | Cyclomatic complexity, loops |
-| `analyze_call_graph` | Build function call graph |
-| `analyze_api_call_chains` | API call threat patterns |
-| `detect_malware_behaviors` | Malware behavior categories |
-| `find_anti_analysis_techniques` | Anti-analysis techniques |
-| `find_dead_code` | Unreachable code detection |
-| `extract_iocs_with_context` | Extract IOCs from strings |
 | `apply_data_classification` | Apply data classification |
+| `apply_data_type` | Apply type to address |
+| `clone_data_type` | Clone data type with new name |
+| `create_array_type` | Create array data type |
+| `create_data_type_category` | Create category folder |
+| `create_enum` | Create enumeration |
+| `create_function_signature` | Create function signature type |
+| `create_pointer_type` | Create pointer data type |
+| `create_struct` | Create custom structure (auto-prefixes fields) |
+| `create_typedef` | Create typedef alias |
+| `create_union` | Create union data type |
+| `delete_data_type` | Delete a data type |
+| `get_enum_values` | Get enumeration values |
+| `get_struct_layout` | Detailed field layout of structure |
+| `get_type_size` | Byte size of a data type |
+| `get_valid_data_types` | Valid Ghidra builtin types |
+| `import_data_types` | Import types from GDT/header |
+| `list_data_type_categories` | List all categories |
+| `list_data_types` | Available data types |
+| `modify_struct_field` | Modify existing field (auto-prefixes Hungarian) |
+| `move_data_type_to_category` | Move type to different category |
+| `remove_struct_field` | Remove field from structure |
+| `search_data_types` | Search for data types |
+| `suggest_field_names` | AI-assisted field name suggestions |
+| `validate_data_type` | Validate data type syntax |
+| `validate_data_type_exists` | Check if data type exists |
+| `validate_function_prototype` | Validate prototype string |
 
-## Analysis Control (3 tools)
+## Documentation (11 tools)
 | Tool | Purpose |
 |------|---------|
-| `list_analyzers` | List available analyzers |
-| `configure_analyzer` | Enable/disable analyzer |
-| `run_analysis` | Trigger auto-analysis |
+| `apply_function_documentation` | Import documentation to target function |
+| `batch_string_anchor_report` | String anchor analysis |
+| `bulk_fuzzy_match` | Bulk fuzzy match across all functions |
+| `compare_programs_documentation` | Compare documentation between programs |
+| `diff_functions` | Diff two functions side by side |
+| `find_similar_functions_fuzzy` | Fuzzy similarity matching |
+| `find_undocumented_by_string` | Find functions by string reference |
+| `get_bulk_function_hashes` | Paginated bulk hashing with filter |
+| `get_function_documentation` | Export complete function documentation |
+| `get_function_hash` | SHA-256 hash of normalized opcodes |
+| `get_function_signature` | Get function prototype string |
 
-## Server Connection (3 tools)
+## Function (21 tools)
 | Tool | Purpose |
 |------|---------|
-| `connect_server` | Connect to Ghidra Server |
-| `disconnect_server` | Disconnect from server |
-| `server_status` | Check connection status |
+| `batch_decompile` | Batch decompile multiple functions |
+| `batch_rename_function_components` | Bulk renaming |
+| `clear_instruction_flow_override` | Clear flow override |
+| `create_function` | Create function at address |
+| `decompile_function` | Decompile to C pseudocode |
+| `delete_function` | Delete function at address |
+| `disassemble_bytes` | Raw byte disassembly |
+| `disassemble_function` | Disassembly listing |
+| `force_decompile` | Force fresh decompilation (bypass cache) |
+| `get_function_by_address` | Function at address |
+| `get_function_variables` | Get all function variables with storage types |
+| `rename_function` | Rename function by name |
+| `rename_function_by_address` | Rename function by address |
+| `rename_variable` | Rename single variable |
+| `rename_variables` | Rename function variables (dict) |
+| `set_function_no_return` | Mark function as non-returning |
+| `set_function_prototype` | Set function signature (WIPES plate comments) |
+| `set_local_variable_type` | Set variable type (rejects no-op if type unchanged) |
+| `set_parameter_type` | Set parameter type |
+| `set_variable_storage` | Control variable storage location |
+| `set_variables` | Atomic type+rename in one call (preferred) |
 
-## Server Repositories (4 tools)
+## Listing (20 tools)
 | Tool | Purpose |
 |------|---------|
-| `list_repositories` | List repositories |
-| `create_repository` | Create new repository |
-| `list_repository_files` | List files in repository folder |
-| `get_repository_file` | File metadata in repository |
+| `convert_number` | Number base conversion |
+| `get_entry_points` | Binary entry points |
+| `get_external_location` | Specific external location detail |
+| `get_function_count` | Total function count |
+| `list_calling_conventions` | Available calling conventions |
+| `list_classes` | List namespace/class names |
+| `list_data_items` | Defined data labels and values |
+| `list_data_items_by_xrefs` | Data items sorted by xref count |
+| `list_exports` | Exported symbols and functions |
+| `list_external_locations` | External location references |
+| `list_functions` | List all functions (paginated) |
+| `list_functions_enhanced` | List with isThunk/isExternal flags |
+| `list_globals` | Global variables |
+| `list_imports` | Imported symbols and libraries |
+| `list_methods` | List class methods |
+| `list_namespaces` | Available namespaces |
+| `list_segments` | Memory segments and layout |
+| `list_strings` | Extracted strings with analysis |
+| `search_functions` | Search functions by name/pattern |
+| `search_strings` | Search strings by regex/substring |
 
-## Version Control (4 tools)
+## Malware (5 tools)
 | Tool | Purpose |
 |------|---------|
-| `checkout_file` | Check out file |
-| `checkin_file` | Check in file with comment |
-| `undo_checkout` | Undo checkout |
-| `add_to_version_control` | Add file to version control |
+| `analyze_api_call_chains` | API call threat patterns |
+| `detect_crypto_constants` | Detect cryptographic constants |
+| `detect_malware_behaviors` | Malware behavior categories |
+| `extract_iocs_with_context` | Extract IOCs from strings |
+| `find_anti_analysis_techniques` | Anti-analysis techniques |
 
-## Version History (2 tools)
+## Program (21 tools)
 | Tool | Purpose |
 |------|---------|
-| `get_version_history` | Full version history |
-| `get_checkouts` | Active checkout status |
+| `analysis_status` | Current analysis status |
+| `create_memory_block` | Create a new memory block |
+| `delete_bookmark` | Delete a bookmark |
+| `get_address_spaces` | List address spaces |
+| `get_current_program_info` | Current program details |
+| `get_metadata` | Program metadata and info |
+| `import_file` | Import file into program |
+| `list_bookmarks` | List all bookmarks |
+| `list_open_programs` | List all open programs |
+| `list_project_files` | List project files |
+| `list_scripts` | List available scripts |
+| `open_program` | Open program from project |
+| `read_memory` | Read raw bytes from memory |
+| `reanalyze` | Re-run analysis on program |
+| `run_ghidra_script` | Execute script by name |
+| `run_script` | Run a script |
+| `run_script_inline` | Execute inline script code |
+| `save_program` | Save current program |
+| `set_bookmark` | Create or update bookmark |
+| `set_image_base` | Set program image base |
+| `switch_program` | Switch active program |
 
-## Admin (4 tools)
+## Symbol (11 tools)
 | Tool | Purpose |
 |------|---------|
-| `terminate_checkout` | Force-terminate checkout |
-| `terminate_all_checkouts` | Force-terminate all checkouts |
-| `list_server_users` | List all server users |
-| `set_user_permissions` | Set repository access level |
+| `batch_create_labels` | Bulk label creation |
+| `batch_delete_labels` | Bulk label deletion |
+| `can_rename_at_address` | Check if address can be renamed |
+| `create_label` | Create label at address |
+| `delete_label` | Delete label at address |
+| `get_function_labels` | Get labels in function |
+| `rename_data` | Rename data item |
+| `rename_external_location` | Rename external reference |
+| `rename_global_variable` | Rename global variable |
+| `rename_label` | Rename existing label |
+| `rename_or_label` | Rename or create label |
 
-## Knowledge Database (5 tools)
+## Xref (11 tools)
 | Tool | Purpose |
 |------|---------|
+| `analyze_call_graph` | Build function call graph |
+| `get_assembly_context` | Assembly context |
+| `get_bulk_xrefs` | Bulk cross-reference lookup |
+| `get_full_call_graph` | Complete call graph for program |
+| `get_function_call_graph` | Function relationship graph |
+| `get_function_callees` | Get function callees |
+| `get_function_callers` | Get function callers |
+| `get_function_jump_targets` | Jump target addresses from disassembly |
+| `get_function_xrefs` | Function cross-references |
+| `get_xrefs_from` | Cross-references from address |
+| `get_xrefs_to` | Cross-references to address |
+
+## Static Bridge Tools (6 tools)
+
+These are always available regardless of tool group loading:
+
+| Tool | Purpose |
+|------|---------|
+| `check_connection` | Verify MCP bridge connectivity |
+| `list_instances` | List available Ghidra instances |
+| `connect_instance` | Connect to a specific Ghidra instance |
+| `load_tool_group` | Load a tool category on demand |
+| `check_tools` | Check which tool groups are loaded |
 | `store_function_knowledge` | Store function data to knowledge DB |
-| `query_knowledge_context` | Search documented functions by keyword |
-| `store_ordinal_mapping` | Store ordinal-to-name mapping |
-| `get_ordinal_mapping` | Look up ordinal name |
-| `export_system_knowledge` | Export documented functions as markdown |
+
+Additional knowledge DB tools (`query_knowledge_context`, `export_system_knowledge`, etc.) are available when the knowledge database is active.

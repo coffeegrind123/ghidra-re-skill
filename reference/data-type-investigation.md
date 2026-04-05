@@ -86,7 +86,7 @@ For each function using the structure:
 set_parameter_type(function_address, parameter_name, "StructName *")
 ```
 
-Or use `batch_set_variable_types` for multiple variables at once.
+Or use `set_variables` for atomic type+rename across multiple variables at once.
 
 After applying, `force_decompile` to refresh — decompiled view will show proper field names instead of raw offsets.
 

@@ -96,7 +96,7 @@ Type: <A|B|C|D|E|F|G> — <description>
 Confidence: <HIGH|MEDIUM|LOW>
 Size: ~N bytes / N instructions
 Neighboring: <prev_function> .. <next_function>
-Status: Awaiting full documentation (FUNCTION_DOC_WORKFLOW_V5)
+Status: Awaiting full documentation (FUNCTION_DOC_WORKFLOW_V6)
 ```
 
 Process in batches of 5-10. After each batch: verify no errors, spot-check 1-2 decompilations.
