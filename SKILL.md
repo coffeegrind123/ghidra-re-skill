@@ -84,15 +84,14 @@ What does the user want?
 
 ## Phase 0: Load Binary
 
-The headless server's `/load_program` is NOT an MCP tool. Load via HTTP directly:
+Use `import_file` to load a binary. It runs Ghidra's headless analyzer automatically:
 
-```bash
-curl -s -X POST http://127.0.0.1:8089/load_program -d "file=/absolute/path/to/binary"
+```
+import_file(file_path="/absolute/path/to/binary", auto_analyze=true)
 ```
 
 After loading:
-1. `run_analysis` — trigger Ghidra auto-analysis
-2. `get_current_program_info` — verify architecture, compiler, format
+1. `get_current_program_info` — verify architecture, compiler, format
 
 Read [reference/headless-operations.md](reference/headless-operations.md) if loading binaries or troubleshooting headless server issues.
 
@@ -196,7 +195,7 @@ For each: `create_function` -> `decompile_function` (sanity check) -> `set_plate
 ## Critical Pitfalls
 
 - Do NOT use GUI tools in headless mode — `launch_codebrowser`, `goto_address`, `get_current_selection` will fail or return meaningless results
-- Do NOT try to load binaries via MCP tools — `/load_program` is HTTP-only, not exposed in the MCP bridge
+- Always use `import_file` to load binaries — it runs `analyzeHeadless` directly
 - Do NOT set comments before prototype — `set_function_prototype` WIPES plate comments. Always: types -> names -> prototype -> comments
 - Do NOT retry phantom variables (`extraout_*`, `in_*`) — they are decompiler artifacts, not fixable
 - Do NOT trust decompiler display types for storage — `get_function_variables` may show `int` display but `undefined4` storage. Always check and explicitly set types

@@ -2,15 +2,13 @@
 
 ## Binary Loading
 
-The headless server's `/load_program` is NOT exposed as an MCP tool. Load via HTTP:
+Use `import_file` to load binaries. It runs `analyzeHeadless` and loads the program into the server automatically:
 
-```bash
-curl -s -X POST http://127.0.0.1:8089/load_program -d "file=/absolute/path/to/binary.dll"
+```
+import_file(file_path="/absolute/path/to/binary.dll", auto_analyze=true)
 ```
 
-Returns: `{"success": true, "program": "binary.dll"}`
-
-After loading: `run_analysis` to trigger Ghidra auto-analysis, then `get_current_program_info` to verify.
+After loading: `get_current_program_info` to verify architecture, compiler, format.
 
 ## HTTP-Only Endpoints
 
