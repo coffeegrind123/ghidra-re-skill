@@ -1,6 +1,6 @@
 ---
 name: ghidra-re
-description: Reverse engineer, decompile, and analyze binaries using 158 Ghidra MCP tools. Covers function documentation, data type investigation, orphaned code discovery, call graph analysis, struct creation, variable renaming, binary reconnaissance, and malware analysis. Use when the user mentions Ghidra, decompilation, disassembly, binary analysis, DLL/EXE investigation, function renaming, malware analysis, or references function addresses like 0x401000. Do NOT use for source-level debugging, dynamic analysis, or non-Ghidra RE tools.
+description: Reverse engineer, decompile, and analyze binaries using 245 Ghidra MCP tools. Covers function documentation, data type investigation, orphaned code discovery, call graph analysis, struct creation, variable renaming, binary reconnaissance, and malware analysis. Use when the user mentions Ghidra, decompilation, disassembly, binary analysis, DLL/EXE investigation, function renaming, malware analysis, or references function addresses like 0x401000. Do NOT use for source-level debugging, dynamic analysis, or non-Ghidra RE tools.
 allowed-tools: mcp__ghidra__* Bash(curl:*)
 when_to_use: "Use when the user wants to reverse engineer or analyze a binary with Ghidra. Examples: 'analyze this binary', 'decompile this function', 'what does this DLL do', 'document all functions', 'find hidden functions', 'create a struct', 'trace the call graph', 'check for malware', 'rename this function at 0x401000'."
 argument-hint: "[function address, binary path, or task description]"
@@ -35,11 +35,11 @@ metadata:
 
 11. **Atomic variable operations**: `set_variables` is the preferred tool for atomic type+rename operations. It eliminates SSA churn from separate type-set and rename calls, reducing decompiler re-analysis cycles.
 
-## v5.0.0 Breaking Changes
+## v5 Breaking Changes (current: v5.12.0)
 
-GhidraMCP v5.0.0 uses a bridge with dynamic tool discovery instead of 193 hardcoded handlers. Key changes:
+GhidraMCP v5 (current v5.12.0) uses a bridge with dynamic tool discovery instead of the v4 hardcoded handlers. Key changes:
 
-- **Tool count**: 158 tools via bridge (152 from schema + 6 static bridge tools) — down from 193 because the bridge auto-discovers tools dynamically
+- **Tool count**: 245 tools via bridge, auto-discovered from `/mcp/schema` at startup plus the static bridge tools (up from 193 hardcoded handlers in v4). The live `/mcp/schema` is the authoritative list — categorized docs are a guide, not exhaustive.
 - **`batch_rename_variables` renamed to `rename_variables`**: The old name no longer exists. Use `rename_variables` for all variable rename operations.
 - **`set_variables` is new**: Atomic type+rename in one call. Preferred over separate `batch_set_variable_types` + `rename_variables` to avoid SSA churn.
 - **`batch_set_comments` arrays now optional**: `decompiler_comments` and `disassembly_comments` arrays are optional — you can pass only `plate_comment` if that's all you need.
@@ -225,7 +225,7 @@ After completing a Ghidra RE task, if you discovered something non-obvious (a de
 
 Load these as needed during your workflow:
 
-- [reference/tool-categories.md](reference/tool-categories.md) — When you need to find the right MCP tool name (158 tools by category)
+- [reference/tool-categories.md](reference/tool-categories.md) — When you need to find the right MCP tool name (245 tools by category; live `/mcp/schema` is authoritative)
 - [reference/function-documentation.md](reference/function-documentation.md) — When documenting functions (V6 protocol + batch dispatch)
 - [reference/data-type-investigation.md](reference/data-type-investigation.md) — When investigating struct types from usage patterns
 - [reference/orphaned-code-discovery.md](reference/orphaned-code-discovery.md) — When scanning for hidden/missed functions

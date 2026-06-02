@@ -1,8 +1,8 @@
-# Ghidra MCP Tool Reference (158 Tools)
+# Ghidra MCP Tool Reference (245 Tools)
 
 ## Tool Categories from /mcp/schema
 
-v5.0.0 uses dynamic tool discovery via bridge. 152 tools from schema + 6 static bridge tools.
+v5.12.0 uses dynamic tool discovery via bridge: ~245 tools auto-registered from `/mcp/schema` plus the static bridge tools. The categorized list below covers the v5.0.0 core surface and is a navigation guide — the live `/mcp/schema` is authoritative for the full v5.12.0 set.
 
 ## Analysis (17 tools)
 | Tool | Purpose |
