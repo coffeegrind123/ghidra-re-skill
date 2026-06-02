@@ -74,33 +74,36 @@ Append new ones as you hit them; promote durable rules into SKILL.md.
 
 ## Addresses & cross-binary porting
 
-- **Default Ghidra image base for these PE DLLs is `0x01d00000`** → Ghidra address =
-  `0x01d00000 + RVA`. Handy when reconciling RVAs from external notes/tools.
+- **Ghidra addresses are image-base-relative.** Read the base from
+  `list_open_programs` / `get_current_program_info` (`image_base`); then
+  RVA = Ghidra address − image base, and live address = runtime base + RVA. PE EXEs
+  commonly base at `0x400000` and DLLs at `0x10000000`, but always read the actual
+  value — don't assume (a relocated module loads at a different runtime base than its
+  preferred image base).
 
-- **Porting offsets between two builds of the same codebase** (e.g. two engine
-  variants — same code, different module): find ONE anchored global in the new binary
-  (anchor via a unique nearby string, e.g. `"Connecting to %s..."` → its referencing
-  function), then apply the *internal struct deltas* from the known binary and verify
-  each lands on a sane global. Deltas survive even when global bases shift. (Worked
-  cleanly porting `cls`/`cmd_text` offsets between two GoldSrc engine DLLs.)
+- **Porting offsets between two builds of the same product:** anchor ONE global in the
+  new binary via a unique nearby string (find the string, xref it to the function that
+  references the global), then apply the known *internal struct deltas* from the
+  reference build and verify each derived address lands on a sane global. Deltas survive
+  global-base shifts — but ONLY if the struct layout is unchanged; a major version bump
+  can move fields, so re-verify each field on the new build rather than trusting deltas.
 
 - **`get_xrefs_to` capping at the `limit`** (default 100) is itself signal — a global
-  with 100+ xrefs is a heavily-used state var (e.g. a connection-state global), which
-  helps confirm you found the right one.
+  with 100+ xrefs is a heavily-used state/config variable, which helps confirm you
+  found the right one.
 
-## Live-memory RE: match the EXACT binary the target runs
+## Live-memory RE: match the EXACT binary the target maps
 
-- **RE the exact binary the live process maps — not a convenient local copy.** Offsets
-  from one build are garbage against another. Offsets derived from a repo copy of
-  `sw.dll` (1.5 MB, older build) read all-zero against the process's freshly-downloaded
-  `sw.dll` (3.5 MB, post-update build) — same name, different binary. ALWAYS `md5sum` /
-  size-compare the analyzed file vs the one in the target (`/proc/<pid>/maps`, or
-  `docker cp` it out and RE that). For a stable harness, pin the target's version
-  (e.g. DepotDownloader `-manifest`) and RE that exact build once.
+- **RE the exact binary the live process maps — not a same-named local copy.** Offsets
+  from one build are garbage against a different build of the same product. ALWAYS
+  `md5sum` / size-compare the file you analyzed against the one mapped in the target
+  (e.g. from `/proc/<pid>/maps`, or pull it out of the live environment and RE *that*).
+  Same filename, different bytes ⇒ different layout. For a stable harness, pin the
+  target's exact version and RE that build once.
 - **All-zero reads at a plausible base ≠ wrong offset.** It usually means wrong-binary
-  OR not-yet-initialized. Distinguish: if several *independent* globals also read 0 while
-  the process is demonstrably past init (e.g. drawing UI in `/proc/<pid>` traces),
-  suspect a binary/build mismatch, not your offset math.
+  OR the target hasn't initialized that global yet. Distinguish: if several
+  *independent* globals also read 0 while the process is demonstrably running, suspect a
+  binary/build mismatch over your offset math.
 
 ## More analysis/strings quirks (v5.12.0)
 

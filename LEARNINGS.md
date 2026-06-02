@@ -3,7 +3,7 @@
 Append-only log of non-obvious discoveries from Ghidra reverse engineering sessions.
 
 ## 2026-06-02: v5.12.0 headless quirks + cross-binary offset porting
-- **Context**: RE of GoldSrc engine DLLs (hw.dll/sw.dll) on the v5.12.0 headless server.
+- **Context**: RE of 32-bit Windows DLLs on the v5.12.0 headless server.
 - **Learning**: (1) `search_strings` returns nothing without `encoding:"ascii"`.
   (2) v5.x headless auto-analysis can NPE (`GhidraScriptUtil.bundleHost null`) and roll
   back function_count, but partial analysis persists and is usable. (3) `reanalyze`
@@ -16,10 +16,10 @@ Append-only log of non-obvious discoveries from Ghidra reverse engineering sessi
   verify each lands sanely. Survives base shifts.
 
 ## 2026-06-02: RE the EXACT binary the live target maps
-- **Context**: Live `/proc/<pid>/mem` verification of a GoldSrc `sw.dll`; offsets read
-  all-zero even though the process was clearly running (drawing its menu in x11drv traces).
-- **Learning**: I'd RE'd a repo copy of `sw.dll` (1.5 MB) but the process mapped a
-  freshly-downloaded `sw.dll` (3.5 MB) — same name, different build → offsets invalid.
+- **Context**: Live `/proc/<pid>/mem` work against a Windows DLL; offsets read all-zero
+  even though the process was clearly running.
+- **Learning**: I'd RE'd a local copy of the DLL, but the process mapped a different
+  build of the same-named DLL (different size/md5) → offsets invalid.
 - **Rule**: Before trusting offsets against a live process, `md5sum`/size-compare the
   analyzed file vs the one in `/proc/<pid>/maps`. RE the exact mapped binary (or pin the
   target's version). All-zero reads at a good base ⇒ wrong binary or pre-init, not
