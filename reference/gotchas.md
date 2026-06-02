@@ -87,3 +87,32 @@ Append new ones as you hit them; promote durable rules into SKILL.md.
 - **`get_xrefs_to` capping at the `limit`** (default 100) is itself signal — a global
   with 100+ xrefs is a heavily-used state var (e.g. a connection-state global), which
   helps confirm you found the right one.
+
+## Live-memory RE: match the EXACT binary the target runs
+
+- **RE the exact binary the live process maps — not a convenient local copy.** Offsets
+  from one build are garbage against another. Offsets derived from a repo copy of
+  `sw.dll` (1.5 MB, older build) read all-zero against the process's freshly-downloaded
+  `sw.dll` (3.5 MB, post-update build) — same name, different binary. ALWAYS `md5sum` /
+  size-compare the analyzed file vs the one in the target (`/proc/<pid>/maps`, or
+  `docker cp` it out and RE that). For a stable harness, pin the target's version
+  (e.g. DepotDownloader `-manifest`) and RE that exact build once.
+- **All-zero reads at a plausible base ≠ wrong offset.** It usually means wrong-binary
+  OR not-yet-initialized. Distinguish: if several *independent* globals also read 0 while
+  the process is demonstrably past init (e.g. drawing UI in `/proc/<pid>` traces),
+  suspect a binary/build mismatch, not your offset math.
+
+## More analysis/strings quirks (v5.12.0)
+
+- **`search_strings` can return empty for a while after load even with
+  `encoding:"ascii"` — the ASCII Strings analyzer is a LATER phase; give it time.** Poll
+  `analysis_status` until `function_count` stops climbing AND a known string resolves.
+  `load_program` kicks off async analysis; `function_count` jumps (e.g. 318 → 4105) as
+  it runs. `run_analysis` returning `new_functions:0, duration ~3ms` with a high
+  `total_functions` means analysis already finished (reporting persisted state) — but
+  defined strings may still be a beat behind the function count.
+- **Fallback when defined strings aren't ready: `search_memory_strings`** (raw memory
+  scan, analyzer-independent) finds string bytes regardless of analysis state.
+- **On v5.12.0 use the MCP `load_program` tool, not the HTTP `/load_program` endpoint**
+  — the HTTP param changed (`file=` now returns `"file path required"`); the MCP tool
+  `load_program({file:"/abs/path"})` works.
