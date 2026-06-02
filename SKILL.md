@@ -231,3 +231,4 @@ Load these as needed during your workflow:
 - [reference/orphaned-code-discovery.md](reference/orphaned-code-discovery.md) — When scanning for hidden/missed functions
 - [reference/hungarian-notation.md](reference/hungarian-notation.md) — When renaming variables (type-to-prefix table)
 - [reference/headless-operations.md](reference/headless-operations.md) — When loading binaries or troubleshooting headless mode
+- [reference/gotchas.md](reference/gotchas.md) — When a tool misbehaves (empty `search_strings`, "Auto-analysis failed", load timeouts, GUI-only errors, version mismatches) — non-obvious failure modes + fixes
