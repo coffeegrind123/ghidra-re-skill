@@ -232,3 +232,4 @@ Load these as needed during your workflow:
 - [reference/hungarian-notation.md](reference/hungarian-notation.md) — When renaming variables (type-to-prefix table)
 - [reference/headless-operations.md](reference/headless-operations.md) — When loading binaries or troubleshooting headless mode
 - [reference/gotchas.md](reference/gotchas.md) — When a tool misbehaves (empty `search_strings`, "Auto-analysis failed", load timeouts, GUI-only errors, version mismatches) — non-obvious failure modes + fixes
+- [reference/dynamic-analysis.md](reference/dynamic-analysis.md) — When static analysis leaves you stuck: confirm offsets/behavior at runtime (run the target headless under Wine, drive it live via `/proc/<pid>/mem`, `WINEDEBUG` crash triage, the clean-DLL-stub methodology, `tcpdump` protocol RE, PE rebasing/patching)

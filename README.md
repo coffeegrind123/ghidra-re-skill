@@ -54,7 +54,9 @@ ghidra-re/
     ├── data-type-investigation.md        # Struct discovery via usage analysis
     ├── orphaned-code-discovery.md        # 3-pass gap scanner, types A-G
     ├── hungarian-notation.md             # Type normalization + prefix table
-    └── headless-operations.md            # Binary loading, HTTP endpoints
+    ├── headless-operations.md            # Binary loading, HTTP endpoints
+    ├── gotchas.md                        # Non-obvious failure modes + fixes
+    └── dynamic-analysis.md               # Runtime RE companion: Wine + /proc/mem + stubs + tcpdump
 ```
 
 Progressive disclosure: SKILL.md metadata (~100 tokens) is always loaded. The SKILL.md body loads when triggered. Reference files load only when needed for specific workflows.
