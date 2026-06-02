@@ -17,7 +17,7 @@ Gives Claude structured workflows for binary analysis in Ghidra's headless mode:
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or any agent supporting the [Agent Skills spec](https://agentskills.io/specification)
 - [Ghidra MCP server](https://github.com/bethington/ghidra-mcp) running in headless mode (Python bridge + Java headless server on port 8089)
-- Ghidra 12.0.3 with Java 21 LTS
+- Ghidra 12.1 with Java 21 LTS
 
 ## Installation
 

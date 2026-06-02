@@ -77,5 +77,5 @@ Ghidra auto-analysis may miss functions (common in Delphi/BCB binaries):
 - Start: `bash /opt/ghidra-mcp/run-mcp.sh`
 - The script starts headless Ghidra server (background) + Python MCP bridge (stdio)
 - Java options: `-Xmx4g -XX:+UseG1GC`
-- Java 21 LTS required (Ghidra 12.0.3)
+- Java 21 LTS required (Ghidra 12.1)
 - Server port configurable via `GHIDRA_MCP_PORT` env var (default 8089)
