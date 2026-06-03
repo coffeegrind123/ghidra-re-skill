@@ -6,11 +6,11 @@ When a static-only pass leaves you stuck — a struct offset you can't fully res
 factory you can't tell returns NULL or an object, a DLL that loads on Windows but
 crashes under your harness — these runtime techniques close the loop.
 
-The worked examples below are from driving the real 32-bit Windows CS 1.6 client
-(`hl.exe` + `sw.dll`) **headless under Wine in a container**, reading/writing its live
+The worked examples below are from driving a real 32-bit Windows game client
+(`target.exe` + `engine.dll`) **headless under Wine in a container**, reading/writing its live
 memory via `/proc/<pid>/mem`, and replacing crashing native DLLs with clean stubs whose
-vtable layout was recovered by RE. Tools referenced live in the cs16 repo under
-`realclient-emu/`.
+vtable layout was recovered by RE. The helper tools referenced (a PE rebaser, an RVA
+byte-patcher, per-DLL stub builds) are generic and easy to reproduce.
 
 Cross-references:
 - [headless-operations.md](headless-operations.md) — the `analyzeHeadless` + Java-`GhidraScript`
@@ -29,7 +29,7 @@ Run a 32-bit Windows app under Wine + a virtual X server (Xvfb) with no GPU and 
 display:
 
 ```bash
-export WINEPREFIX=/root/.wine-cs16 WINEARCH=win32 DISPLAY=:99
+export WINEPREFIX=/root/.wine WINEARCH=win32 DISPLAY=:99
 # Start a virtual framebuffer once (1024x768x24; -nolisten tcp = no network listener):
 xdpyinfo -display :99 >/dev/null 2>&1 || \
   { setsid Xvfb :99 -screen 0 1024x768x24 -nolisten tcp </dev/null >/tmp/xvfb.log 2>&1 & sleep 2; }
@@ -45,7 +45,7 @@ xdpyinfo -display :99 >/dev/null 2>&1 || \
 
   ```bash
   cd "$GAMEDIR"
-  setsid wine hl.exe -game cstrike -window -width 640 -height 480 \
+  setsid wine target.exe -game <mod> -window -width 640 -height 480 \
     -noip -nojoy -noaudio -insecure -soft </dev/null >/tmp/hl.log 2>&1 &
   ```
 
@@ -61,7 +61,7 @@ xdpyinfo -display :99 >/dev/null 2>&1 || \
   `MessageBox` no one can dismiss:
 
   ```bash
-  wine reg delete "HKCU\Software\Valve\Half-Life\Settings" \
+  wine reg delete "HKCU\Software\<Vendor>\<Game>\Settings" \
     /v CrashInitializingVideoMode /f >/dev/null 2>&1
   ```
 
@@ -101,7 +101,7 @@ WINEDEBUG=+seh ...   then:   grep -aE "code=c0000005|info\[" /tmp/hl.log
 ### `+loaddll` — module → base-address map
 Prints each module load with its base address. Combine with `/proc/<pid>/maps` to map
 runtime addresses ↔ modules, and to feed §3's `ret=` → RVA math (e.g.
-`client.dll@0x0B8E0000` → ImageBase `0x1900000`; `sw.dll@0x01D00000`).
+`consumer.dll@<runtime_base>` → its PE `ImageBase`; `engine.dll@<runtime_base>`).
 
 ### `+module` — DllMain success/failure (catches the silent dependency failure)
 Shows `MODULE_InitDLL ... RETURN 0` and `Initialization of L"x" failed`. **A dependency's
@@ -139,6 +139,38 @@ A crash in ntdll's import resolver (`_import_dll`, e.g. `movzx edx,WORD PTR [ebx
 `ebx = base + bad_name_rva`) means an import table landed on an uncommitted page — often
 a downstream symptom of §3's reservation/relocation collisions.
 
+### Finding the CALL SITE of a "call through garbage pointer" crash
+`+seh` gives you the faulting `ip` (the garbage TARGET, e.g. `addr=0x0D439C61` not in any
+module), but not WHO called it. Three ways to get the caller, in order of preference:
+
+1. **Stub trap-log (best when the bad call goes through a stub vtable).** If the garbage call
+   is a vtable method on a clean stub (§3), give every unimplemented slot a trap that logs
+   `__builtin_return_address(0)`:
+   ```c
+   static int __attribute__((thiscall)) vtbl_trap(void *self){
+       slog_hex("TRAP method ret=", (unsigned)(unsigned long)__builtin_return_address(0));
+       return 0; }
+   ```
+   The last log lines before the crash give the **exact caller RVA** in the consumer DLL.
+   A tail-jmp thunk (`mov ecx,[ecx+0x78]; mov eax,[ecx]; jmp [eax+N]`) preserves the original
+   return address, so the logged ret is the thunk's *caller*, and `N` is the vtable offset.
+2. **ptrace SIGSEGV tracer (no gdb needed; container needs `CAP_SYS_PTRACE`).** A 64-bit Python
+   `ctypes` tracer SEIZEs all `/proc/<pid>/task/*` tids and catches the SIGSEGV. For a 32-bit
+   Wine tracee the kernel maps the i386 regs into the x86_64 `user_regs_struct`, so `regs.rip`
+   == `eip`, `regs.rsp` == `esp`. Read `[esp]` (= the `call`'s return address = call site) and
+   scan the stack for module-mapped values. `PTRACE_SEIZE=0x4206`, `__WALL=0x40000000`,
+   `PTRACE_GETREGS=12`; pass benign segvs through with `PTRACE_CONT(sig)`, capture the fatal
+   one. Note: Wine synthesizes *software* exceptions (RaiseException / OutputDebugString,
+   `code=40010006`) without a real SIGSEGV, so a SIGSEGV tracer only stops on genuine faults.
+3. **objdump the consumer DLL** at the call-site RVA: `i686-w64-mingw32-objdump -d
+   --start-address=<va> --stop-address=<va2> consumer.dll.orig` (PE VAs are ImageBase+RVA).
+   Count the `push`es before the `call [reg+N]` to get the arg count → the required `ret N`.
+
+> **winedbg JIT is NOT usable for legacy-engine-class engines.** Setting AeDebug `Debugger=winedbg
+> --auto %ld %ld` + `Auto=1` makes winedbg break on the engine's *benign first-chance* SEH
+> exceptions during init → boot never completes. Disable it (`Auto=0`) and use the three
+> methods above. `winedbg --auto` as a launcher also silently fails here.
+
 ---
 
 ## 3. The "Wine page-commit fault" and the clean-DLL-stub methodology
@@ -154,16 +186,51 @@ page commit, but then **breaks IAT binding** → a new exec fault in the `.rdata
 **Robust fix: replace the problem DLL with a clean stub.** A stub with a trivial
 `DllMain{ return TRUE; }`, KERNEL32-only dependencies, no relocation / anti-tamper /
 packing, exporting exactly the symbols the consumer imports, has no page to fail to commit
-and loads deterministically. Proven 6× in the cs16 verifier: `mss32`, `ddraw`, `SDL2`,
-`steam_api`, `chromehtml` (and the wined3d-reservation that `ddraw` pulled in). Stubs live
-in `realclient-emu/<name>-stub/` with a `build.sh`; deploy each over the game-dir DLL with
+and loads deterministically. Proven 6× in a real RE project: `mss32`, `ddraw`, `SDL2`,
+`steam_api`, `htmlctl` (and the wined3d-reservation that `ddraw` pulled in). Stubs live
+in `<name>-stub/` with a `build.sh`; deploy each over the game-dir DLL with
 `docker cp` (§7).
+
+### Confirming relocation is the trigger — and rebasing as an alternative fix
+The fault fires *because the DLL relocated*, so the fastest confirmation is purely runtime —
+no Ghidra needed. Snapshot a live (or about-to-crash) process and compare each module's load
+address to its preferred `ImageBase`:
+
+```bash
+p=$(pgrep -x <target>.exe | head -1)
+for d in a.dll b.dll c.dll; do
+  base=$(grep -i "/$d\$" /proc/$p/maps | head -1 | cut -d- -f1)
+  echo "$d loaded @0x$base"        # != PE ImageBase  => RELOCATED  => fault candidate
+done
+```
+
+Cross-check the PE header for *why* they relocate — two causes, both visible statically:
+- **Shared preferred base.** Read each DLL's `ImageBase` (optional-header +0x1c for PE32). When
+  several DLLs all prefer the SAME base (a common pattern when a family of related modules ships
+  with one default base), only one wins; the rest relocate. A short `python3` over the PE headers
+  finds the collision set.
+- **`DYNAMICBASE`.** `DllCharacteristics` (optional-header +0x46) bit `0x40` = ASLR — the loader
+  relocates that module **every launch** regardless of collisions. These are the most volatile.
+
+**The crash is concurrency-amplified**: a single launch may relocate cleanly many times in a row,
+but running N processes that relocate the same DLLs *simultaneously* spikes the page-commit-fault
+rate. So "it boots fine solo" does NOT clear a relocating-DLL theory — reproduce under the real
+concurrency.
+
+**Alternative fix when you can't stub it** (you need the DLL's real behavior, not a no-op):
+**rebase the file** to a distinct fixed base + clear `DYNAMICBASE`, so the loader maps it at its
+preferred base with **no relocation** → no fault. This is a PE rewrite (apply `.reloc` fixups,
+rewrite `ImageBase`, clear the `DYNAMICBASE` bit). Assign each colliding DLL its own slot in a
+free address window. Verify post-fix: re-snapshot `/proc/maps` — every rebased DLL now sits at
+its fixed base and the old relocation range is empty. **Integrity caveat:** rebasing changes the
+file bytes, so if a peer/server checksums the file you must arrange for the *original* checksum to
+be reported (e.g. keep a pristine copy and hook the engine's hash routine to read it).
 
 ### Build & export decoration
 Build with mingw, `--kill-at` for **undecorated cdecl** exports:
 
 ```bash
-i686-w64-mingw32-gcc -m32 -O2 -shared -o chromehtml-stub.dll chromehtml_stub.c \
+i686-w64-mingw32-gcc -m32 -O2 -shared -o htmlctl-stub.dll htmlctl_stub.c \
   -Wl,--kill-at -lkernel32
 ```
 
@@ -174,7 +241,7 @@ Watcom/MSVC-decorated name, e.g. `_AIL_startup@0`):
 - The trick that works: give the C symbol a **double** leading underscore via an `asm()`
   label, then let `ld --export-all-symbols` strip *one* underscore, yielding the exact
   decorated name. `__stdcall` codegen still emits the correct callee-cleanup `ret N` from
-  the param list. From `realclient-emu/mss32-stub/stub.c`:
+  the param list. From `mss32-stub/stub.c`:
 
   ```c
   #define AIL(sym, params, ...) \
@@ -189,7 +256,7 @@ Watcom/MSVC-decorated name, e.g. `_AIL_startup@0`):
 Some DLLs hand the consumer a C++-style object via a `CreateInterface(name)` factory; the
 consumer then calls vtable slots and **often derefs the result with no NULL check** — so
 returning NULL from the factory crashes the consumer. You must return a *real* object
-whose vtable has working slots. The discipline (from `realclient-emu/{steam,chromehtml}-stub/`):
+whose vtable has working slots. The discipline (from `{steam,htmlctl}-stub/`):
 
 1. **Implement every actually-invoked slot with the CORRECT callee-cleanup `ret N`** via
    `__attribute__((thiscall))` — `N = stack-arg-bytes` (1 stack arg → `ret 4`, 2 → `ret 8`,
@@ -210,6 +277,18 @@ whose vtable has working slots. The discipline (from `realclient-emu/{steam,chro
    }
    /* in DllMain: init all VT_SLOTS to &vtbl_trap, then overwrite the known ones */
    ```
+   > ⚠️ **The catch-all trap is a latent stack-corruption bug for any trapped slot that takes
+   > args.** `vtbl_trap(void *self)` cleans **0 bytes** (`ret 0`), correct ONLY for 0-arg
+   > methods. If a method WITH stack args lands on the trap, it leaks those bytes → the stack
+   > corrupts. One leak is often survivable, so it hides: the stub "works" through boot and on
+   > most servers, then a *different input path* (e.g. a server that pushes an HTML MOTD) fires
+   > a trapped 2-arg slot repeatedly across reconnect cycles → the leaks accumulate → a call
+   > through a garbage pointer (`call 0x0D4…` / `EIP=0`) far from the real cause. **Fix = give
+   > that slot the correct `ret N` (implement it; the body can still just `return 0` — it's the
+   > cleanup, not the return value, that matters). Don't "fix" it by returning a fat object
+   > unless the consumer needs one — a non-NULL return makes the consumer drive THAT object
+   > through more arg-taking traps and moves the crash.** A generic trap cannot self-correct its
+   > `ret N`, so every arg-taking slot that ever fires must be implemented individually.
 3. The factory returns a small object `{ const void **vtbl; }` pointing at that table.
 
 **The iteration recipe** (enumerate-and-implement, one slot per cycle):
@@ -225,7 +304,7 @@ whose vtable has working slots. The discipline (from `realclient-emu/{steam,chro
 4. Implement that slot (`THISCALL`, correct `ret N`), wire it into the vtable in `DllMain`,
    `build.sh`, `docker cp`, relaunch. Repeat until the consumer stays alive.
 
-Real worked stubs: `realclient-emu/{mss32,ddraw,sdl2,steam,chromehtml}-stub/`.
+Real worked stubs: `{mss32,ddraw,sdl2,steam,htmlctl}-stub/`.
 
 ---
 
@@ -240,16 +319,16 @@ offsets: Ghidra gives you the RVA, `/proc/<pid>/mem` reads/writes it live.
 
 ```bash
 docker exec rc-test bash -lc '
-p=$(for q in $(pgrep -f hl.exe); do
-      grep -qi sw.dll /proc/$q/maps 2>/dev/null && echo $q && break; done)
-b=$(grep -i sw.dll /proc/$p/maps | head -1 | cut -d- -f1)
+p=$(for q in $(pgrep -f target.exe); do
+      grep -qi engine.dll /proc/$q/maps 2>/dev/null && echo $q && break; done)
+b=$(grep -i engine.dll /proc/$p/maps | head -1 | cut -d- -f1)
 python3 -c "import struct;m=open(\"/proc/$p/mem\",\"rb\");
 m.seek(0x$b+0x9EEDE0);print(\"cls.state=\",struct.unpack(\"<I\",m.read(4))[0])"'
 ```
 
 - **Pick the RIGHT process when several share a name.** Don't trust the first `pgrep` hit:
   choose the PID whose `/proc/<pid>/maps` actually contains the **target module**
-  (e.g. `sw.dll`), and **skip zombies** (`/proc/<pid>/stat` state `Z`) — a non-`--init`
+  (e.g. `engine.dll`), and **skip zombies** (`/proc/<pid>/stat` state `Z`) — a non-`--init`
   PID 1 leaves dozens of defunct wine procs that pollute `pgrep` (see §7).
 - **Reading a state enum:** `seek(base + cls.state RVA)`, unpack `<I`. In this engine
   `cls.state` runs 1=disconnected(menu) … 5=ca_active.
@@ -269,7 +348,7 @@ m.seek(0x$b+0x9EEDE0);print(\"cls.state=\",struct.unpack(\"<I\",m.read(4))[0])"'
 When the unknown is a binary's **network behavior**, watch the wire instead of the code.
 
 ```bash
-tcpdump -i any -n host 139.162.162.62          # sizes / direction / rate
+tcpdump -i any -n host <server-ip>          # sizes / direction / rate
 ```
 
 - **Read the pattern, not just payloads.** A steady small-out / large-in fragment loop =
@@ -304,23 +383,23 @@ this is pefile mangling, not a legitimate relocation.
 **Correct approach: a hand-rolled reloc applier** that touches only `.reloc`
 `IMAGE_REL_BASED_HIGHLOW` targets (RVA→file-offset via the section table), leaves ILT/IAT
 untouched, clears `IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE` (0x40), and zeroes the stale
-Authenticode (SECURITY) data-directory entry. Real tool: `realclient-emu/rebase-dll.py`
+Authenticode (SECURITY) data-directory entry. Real tool: `rebase-dll.py`
 (cross-validated **byte-for-byte vs pefile** everywhere except the import dir pefile
 corrupts; it even asserts that **0** reloc fixups land in the IAT before writing).
 
 ```bash
-realclient-emu/rebase-dll.py SDL2.dll 0x28000000 SDL2-rebased.dll
+rebase-dll.py SDL2.dll 0x28000000 SDL2-rebased.dll
 ```
 
 ### Byte-patching by RVA
 For the `.text`/`.rdata` of these DLLs, **RVA == file offset** (verified:
 `.text` RVA 0x1000, raw 0x1000) — but still resolve RVA→file-offset via the section table
 to be safe (`pefile.get_offset_from_rva`, or the inline section walk in the tool). Real
-tool: `realclient-emu/patch-swdll.py`:
+tool: `patch-swdll.py`:
 
 ```bash
 # NOP a 2-byte JZ at RVA 0xA3364, and force "MOV AL,1; RET 4" at 0xA5830:
-realclient-emu/patch-swdll.py sw.dll.orig sw.dll 0xA3364=9090 0xA5830=B001C20400
+patch-swdll.py engine.dll.orig engine.dll 0xA3364=9090 0xA5830=B001C20400
 ```
 
 Note: NOP-ing return checks to force a "success" can leave the object **inconsistent**

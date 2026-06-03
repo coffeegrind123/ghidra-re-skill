@@ -2,13 +2,31 @@
 
 ## Binary Loading
 
-Use `import_file` to load binaries. It runs `analyzeHeadless` and loads the program into the server automatically:
+Two paths, with very different analysis behavior — pick by what you need:
 
-```
-import_file(file_path="/absolute/path/to/binary.dll", auto_analyze=true)
-```
+- **`load_program(file=<path>)`** — IS exposed as an MCP tool in v5.12.0 (the HTTP-endpoint
+  table below predates this; it is no longer bridge-only). Loads the PE FAST but with **only
+  minimal analysis** (exports/symbols; e.g. a 1.5 MB engine shows ~300 functions, not
+  thousands), so a target address usually has **no function created** yet —
+  `decompile_function` returns `"No function found"`. Workflow for a few specific functions:
+  ```
+  load_program(file=…)  ->  create_function(address=0x…, name="X")  ->  decompile_function(0x…)
+  ```
+  Do NOT call `run_analysis` to "finish" it — full auto-analysis can **hang for many minutes**
+  on a large binary (param-ID + decompiler analyzers stall on pathological functions). Just
+  create the handful of functions you actually need.
+- **`import_file(file_path=…, auto_analyze=true)`** — runs the full `analyzeHeadless` pass (all
+  functions + xrefs). Slower, same hang risk on big binaries. Needed when you want
+  whole-program xrefs: `get_function_callers`/`get_function_callees`/`get_xrefs_to` return
+  **nothing** on a `load_program`'d partial program (no xref pass ran).
 
-After loading: `get_current_program_info` to verify architecture, compiler, format.
+After loading: `get_current_program_info` to verify image base / arch / `function_count` (a
+low count == partial `load_program` state).
+
+**`load_program`-loaded programs are EPHEMERAL**: `save_program` fails ("Location does not
+exist for a save operation") and `list_project_files` needs GUI mode, so names/comments you
+add live only for the session. For persistent annotation, `import_file` into a project or run
+`analyzeHeadless` on the CLI.
 
 ## HTTP-Only Endpoints
 
