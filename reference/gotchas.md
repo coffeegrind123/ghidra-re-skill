@@ -119,3 +119,21 @@ Append new ones as you hit them; promote durable rules into SKILL.md.
 - **On v5.12.0 use the MCP `load_program` tool, not the HTTP `/load_program` endpoint**
   — the HTTP param changed (`file=` now returns `"file path required"`); the MCP tool
   `load_program({file:"/abs/path"})` works.
+
+## Wine crash-triage misreads (cost real time)
+
+- **"Process terminated cleanly" ≠ no crash.** If a Wine guest installs a top-level handler
+  (`SetUnhandledExceptionFilter` / a `__try` around the frame loop) that CATCHES an access
+  violation and exits via its own shutdown, the process exit looks orderly and `winedbg --auto`
+  / interactive winedbg break on NOTHING (they only act on *unhandled* / silently pass
+  first-chance). It still crashed. Catch it with **gdb attached + `catch signal SIGSEGV`** (host
+  SIGSEGV fires before the guest handler) — see dynamic-analysis.md §2.
+- **The post-crash "Missing shutdown function for X : Y" / "File … never closed" storm is a red
+  herring.** Those are `code=40010006` (`OutputDebugString`) lines from the engine's normal
+  `Sys_Shutdown` audit that runs on ANY quit — not the fault. Grep for the single `code=c0000005`
+  ABOVE them. Reading the shutdown audit (or the last `loading <x>` line) as the crash site points
+  you at the wrong subsystem.
+- **Don't NOP a guest's `SetUnhandledExceptionFilter` call to "force" the crash unhandled.** In an
+  MSVCRT-static binary the (usually two) call sites are CRT internals — install the CRT filter, then
+  restore the previous — and NOPping them corrupts CRT exception setup and breaks boot. Use a
+  host-level SIGSEGV catcher (gdb/ptrace) instead.

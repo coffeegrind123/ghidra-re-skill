@@ -70,6 +70,13 @@ xdpyinfo -display :99 >/dev/null 2>&1 || \
   like a server/auth problem but is self-inflicted. Drop the flag when you actually need
   the socket path.
 
+- **Drive scripted actions via cmdline command-stuffing, not runtime memory writes, when a
+  debugger is attached.** Many engines stuff `+<cmd> <args>` cmdline tokens into their command
+  buffer at startup (`+connect <ip:port>`, `+map …`, `+exec …`). Use that to make a run reach a
+  specific state deterministically — it avoids a `/proc/<pid>/mem` injector, which **conflicts with
+  gdb/ptrace** (the debugger owns the ptrace attach). Reserve the `/proc/mem` command-buffer
+  injection (§4) for when you are NOT also tracing the process.
+
 See container/deploy footguns in §7.
 
 ---
@@ -97,6 +104,20 @@ WINEDEBUG=+seh ...   then:   grep -aE "code=c0000005|info\[" /tmp/hl.log
   / anti-tamper code (e.g. Miles `mss32.dll` patches its own code in `DllMain`).
 - **Identical register state across crashes in different DLLs ⇒ the same Wine loader code
   path**, not a bug unique to one DLL.
+- **`ip`/`addr` inside the thread's STACK range** (between `esp` and the stack base — e.g.
+  `eip=0x0023db6a` with `esp=0x0020f4c0`) = control transferred INTO stack data and executed
+  it = a **stack smash / corrupted return-address or function-pointer**, not a normal module
+  fault. The `info[0]=1`/`info[1]=0` write-to-NULL is then incidental (just where the garbage
+  stack bytes happened to fault). Don't chase the faulting instruction — find WHAT redirected
+  control there (§2 "call site").
+- **Ignore the `code=40010006` ("DBG_PRINTEXCEPTION_C") storm** — that code is `OutputDebugString`/
+  `RaiseException`, i.e. *log output*, not a fault (a noisy stub or chatty engine emits thousands).
+  Grep specifically for `code=c0000005`. **And the orderly-teardown red herring:** after the real
+  fault, an engine often runs its normal shutdown audit (a flurry of `code=40010006` lines like
+  `"Missing shutdown function for X : Y"` / `"File … was never closed"`). Those are the engine's
+  clean `Sys_Shutdown` walk that runs on ANY quit — NOT the crash. The single `c0000005` *above*
+  them is the fault. Misreading the shutdown audit as "Processing models → crash" sends you to the
+  wrong subsystem.
 
 ### `+loaddll` — module → base-address map
 Prints each module load with its base address. Combine with `/proc/<pid>/maps` to map
@@ -154,22 +175,68 @@ module), but not WHO called it. Three ways to get the caller, in order of prefer
    The last log lines before the crash give the **exact caller RVA** in the consumer DLL.
    A tail-jmp thunk (`mov ecx,[ecx+0x78]; mov eax,[ecx]; jmp [eax+N]`) preserves the original
    return address, so the logged ret is the thunk's *caller*, and `N` is the vtable offset.
-2. **ptrace SIGSEGV tracer (no gdb needed; container needs `CAP_SYS_PTRACE`).** A 64-bit Python
-   `ctypes` tracer SEIZEs all `/proc/<pid>/task/*` tids and catches the SIGSEGV. For a 32-bit
-   Wine tracee the kernel maps the i386 regs into the x86_64 `user_regs_struct`, so `regs.rip`
-   == `eip`, `regs.rsp` == `esp`. Read `[esp]` (= the `call`'s return address = call site) and
-   scan the stack for module-mapped values. `PTRACE_SEIZE=0x4206`, `__WALL=0x40000000`,
-   `PTRACE_GETREGS=12`; pass benign segvs through with `PTRACE_CONT(sig)`, capture the fatal
-   one. Note: Wine synthesizes *software* exceptions (RaiseException / OutputDebugString,
-   `code=40010006`) without a real SIGSEGV, so a SIGSEGV tracer only stops on genuine faults.
-3. **objdump the consumer DLL** at the call-site RVA: `i686-w64-mingw32-objdump -d
+2. **gdb attach + catch SIGSEGV first-chance (simplest; the go-to when the app HANDLES the
+   exception).** Wine delivers a guest AV as a host `SIGSEGV` *before* it builds the Windows
+   exception and runs the guest's handler — so gdb sees it first-chance even when the engine
+   would catch+swallow it (the case where winedbg/`--auto` see nothing; see the box below).
+   `apt-get update && apt-get install -y gdb` (the `update` is required — the package is often
+   not in the stale index). Drive it headless with a batch script:
+   ```
+   # gdb.script
+   set pagination off
+   set confirm off
+   catch signal SIGSEGV
+   commands
+     silent
+     printf "\n##SIGSEGV## eip="
+     output/x $eip
+     printf " esp="
+     output/x $esp
+     printf " edi="
+     output/x $edi
+     printf "\n"
+     x/80xw $esp          # raw 32-bit Windows stack: the call chain lives here
+     continue             # pass it on; the engine's handler still runs, process continues/exits
+   end
+   continue
+   ```
+   `gdb -p <pid> --batch -x gdb.script >/tmp/gdb.log 2>&1`. For a 32-bit Wine tracee gdb exposes
+   i386 regs as `$eip/$esp/$edi/...`. **Attach AFTER boot** (post sustained-liveness) so the
+   engine's benign boot-time first-chance AVs are already past and the next SIGSEGV is the one you
+   want; otherwise your `commands` block dumps every benign segv too (still fine — just grep the
+   log for the fatal `eip`). Drive the connect/trigger via a **cmdline autoconnect (`+connect
+   <ip:port>`)** rather than a `/proc/<pid>/mem` write — gdb owns the ptrace attach, so an external
+   `/proc/mem` writer conflicts. **Reading the call chain from the `x/80xw $esp` dump:** scan for
+   words that fall inside a module's **`.text`** range (cross-check `/proc/<pid>/maps`). A word that
+   lands in a module's `.rdata`/`.data`/IAT segment is **data, not a return address** — verify by
+   disassembling it: if it decodes to garbage (e.g. repeating `d0 01` = `ROL byte[ecx],1`), it's
+   data. A genuine return address, when you disassemble the bytes *just before* it, ends in the
+   `call` that made the frame — e.g. ret `0x01d037bd` ← `call dword ptr [edx+0x68]` (a C++ vtable
+   slot-0x68 dispatch), which both names the call site AND the vtable offset.
+3. **ctypes ptrace SIGSEGV tracer (when gdb can't be installed; container needs `CAP_SYS_PTRACE`).**
+   A 64-bit Python `ctypes` tracer SEIZEs all `/proc/<pid>/task/*` tids and catches the SIGSEGV.
+   For a 32-bit Wine tracee the kernel maps the i386 regs into the x86_64 `user_regs_struct`, so
+   `regs.rip` == `eip`, `regs.rsp` == `esp`. Read `[esp]` and scan the stack for module-mapped
+   values. `PTRACE_SEIZE=0x4206`, `__WALL=0x40000000`, `PTRACE_GETREGS=12`; pass benign segvs
+   through with `PTRACE_CONT(sig)`, capture the fatal one. (Same first-chance advantage as gdb;
+   Wine's *software* exceptions — `code=40010006` — raise no SIGSEGV, so the tracer only stops on
+   genuine faults.)
+4. **objdump the consumer DLL** at the call-site RVA: `i686-w64-mingw32-objdump -d
    --start-address=<va> --stop-address=<va2> consumer.dll.orig` (PE VAs are ImageBase+RVA).
    Count the `push`es before the `call [reg+N]` to get the arg count → the required `ret N`.
 
-> **winedbg JIT is NOT usable for legacy-engine-class engines.** Setting AeDebug `Debugger=winedbg
-> --auto %ld %ld` + `Auto=1` makes winedbg break on the engine's *benign first-chance* SEH
-> exceptions during init → boot never completes. Disable it (`Auto=0`) and use the three
-> methods above. `winedbg --auto` as a launcher also silently fails here.
+> **winedbg can't catch a HANDLED first-chance exception — use gdb/ptrace instead.** If the
+> guest installs a top-level handler (`SetUnhandledExceptionFilter`) or wraps the frame in
+> `__try/__except` and *catches* the AV (cleanly exiting via its own shutdown), then **neither**
+> `winedbg --auto` (it's the AeDebug 2nd-chance/*unhandled* handler) **nor** interactive winedbg
+> (it silently passes first-chance to the app) ever breaks — the process just "terminates." Only a
+> host-level SIGSEGV catcher (methods 2/3) sees it, because it fires before the guest handler.
+> **Do NOT try to force it unhandled by NOPping the guest's `SetUnhandledExceptionFilter` call:**
+> in an MSVCRT-static binary the two `call [SetUnhandledExceptionFilter]` sites are CRT internals
+> (install the CRT filter, then restore the previous) — NOPping them corrupts CRT EH setup and
+> destabilizes boot. Also note the older AeDebug-JIT trap: `Debugger=winedbg --auto … %ld %ld` +
+> `Auto=1` makes winedbg break on benign first-chance SEH during init → boot never completes;
+> keep `Auto=0`.
 
 ---
 
