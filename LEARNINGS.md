@@ -103,3 +103,62 @@ Append-only log of non-obvious discoveries from Ghidra reverse engineering sessi
   before concluding the region is correct — verify the hook lands where you think by disassembling
   its jump target. To get a backtrace for a Wine crash the guest catches, attach **gdb** (or a ctypes
   ptrace tracer) and catch SIGSEGV first-chance — not winedbg. See reference/dynamic-analysis.md §2.
+
+## 2026-06-04 (#2): "process gone" ≠ "crashed" — triage clean-exit vs fault BEFORE you RE, and sniff cmd_text for the trigger
+- **Context**: A multi-worker Wine game-client sweep reported many "crashed after connect (state 4)".
+  An external watcher only knew the process had vanished from `/proc/<pid>/mem` (a short read = the
+  mapping went away). The prior assumption was CPU-starvation memory faults under concurrency.
+- **Learning**: (1) **A vanished `/proc/<pid>/mem` mapping has TWO causes that look identical from
+  outside: a real fault (SIGSEGV→guest AV) and a CONTROLLED exit (`Sys_Quit`/`Host_Shutdown`).** Decide
+  which BEFORE spending any RE — a clean exit has no crash to find. The discriminator is the guest's
+  own stderr (`WINEDEBUG=+seh` to surface it): a fault shows a lone **`code=c0000005`** ("Unhandled
+  exception"); a controlled exit shows **only** the `code=40010006` (`DBG_PRINTEXCEPTION_C` =
+  OutputDebugString) **`Sys_Shutdown` audit storm** ("Missing shutdown function for …") and, if it
+  wasn't even a `Sys_Error`, **no `Sys_Error`/`FATAL`/`Host_Error` string anywhere** in the window. The
+  earlier entry noted "the lone c0000005 above the storm is the fault" — the complement is just as
+  important: **storm with NO c0000005 ⇒ no crash; it quit on purpose.** (`dllMaps` empty at capture
+  confirms full teardown.) This reframed a whole class of "concurrency crashes" as benign clean exits.
+- **Corollary technique — find what TRIGGERS a clean guest exit by sniffing the command buffer.** A
+  server's `svc_stufftext` (and any console-driven quit) lands in the engine's `cmd_text` sizebuf as
+  plain command strings, executed within a frame or two. **Sub-frame poll `cmd_text` (data ptr +
+  cursize) faster than the frame rate** (~15ms vs a 33ms frame at fps_max 30; positioned `pread` so it
+  doesn't race the main reader) and dedup the lines that aren't yours. Here it caught the real
+  stufftext (`retry`/`unpause`/`hideconsole`/`m_pitch`) and **exonerated** the "server forces
+  `quit`/`record`" theory (no such command) — proving the exit was engine-internal at spawn, not
+  server-driven. A suggestive shutdown artifact (an unclosed `demoheader.dmf`) was a red herring;
+  the buffer sniff is what settled it.
+- **Rule**: When something reports a process "crashed" but you only have "the mapping is gone," FIRST
+  classify crash-vs-clean-exit from guest stderr (`+seh`: `c0000005` = fault; bare `40010006`
+  `Sys_Shutdown` storm = controlled exit) — don't RE a non-crash. To attribute a clean *guest-driven*
+  exit, sub-frame-sniff the engine command buffer for the triggering command before assuming a static
+  cause; rule the server in/out by what it actually sends, not by a plausible artifact. See
+  reference/dynamic-analysis.md §2–3.
+
+## 2026-06-04 (#3): map the engine's quit machinery ONCE; don't attribute a static path to a phenomenon you haven't reproduced
+- **Context**: Chasing "headless game client cleanly exits ~4-10s into a connect" (GoldSrc sw.dll). Goal: find WHERE/WHY the engine quits during spawn.
+- **Learning**: (1) **Build the quit-map by working the teardown backward to its UNIQUE trigger, not forward from the spawn path.** A clean *full* shutdown = a specific teardown signature (here the "Missing shutdown function" memory-pool audit storm) that only runs on one engine run-state value. Find the global that holds run-state (xref the state machine / Host_Frame), find every WRITER of the quit value, and eliminate: most writers are init/command-handlers/other-state; usually exactly ONE in-frame code path sets the full-quit value. Here: full-quit run-state 3 ⇐ Host_Quit_f ⇐ the single in-frame `host_killtime` auto-quit at the tail of the host frame. Every other in-frame setter wrote the *restart/menu* value (2), and the key-handler sites are dead headless. This is a 30-minute map that turns any future "client vanished cleanly" into a 30-second triage.
+- **Learning**: (2) **A static "this is the only code path that could do X" is necessary but NOT sufficient to claim it caused an observed X — confirm the inputs are actually present at runtime.** I correctly proved host_killtime→Host_Quit_f is the unique full-quit path, then over-reached and called the server malicious. Live `/proc/<pid>/mem` reads (host_killtime.value, run-state, sv.time) showed host_killtime stayed 0, run-state stayed "active", sv.time stayed 0 (so the compare can't even trip without a negative value). A user's retail-client cross-check (joins fine) was the tell the static path wasn't the cause. **META-CORRECTION (same session): I then concluded "doesn't reproduce at all" — WRONG AGAIN, because I'd tested only SERIALLY (one client). Running 4 clients in parallel reproduced it instantly — the failure mode was CPU contention, invisible to a single-client repro.** So the bug was real and reproducible, just only in the multi-worker regime. Lesson compounds: sample across the ACTUAL operating regime (here: concurrency) before declaring "reproduces" OR "doesn't" — a convenient single-instance repro is not the regime the bug lives in. Final classification came from a full-log `c0000005` scan (the 160-line tail is useless under +seh — each engine print balloons to ~5 trace lines, pushing any fault out of the window): all ~15 contention exits were CLEAN (no AV) — orderly engine shutdowns, not memory faults.
+- **Learning**: (3) **A clean orderly-shutdown signature in the log does NOT by itself prove a voluntary quit** — a top-level SEH/`__except` handler can catch a real AV and *then* run the orderly teardown (same storm). Always look for a `c0000005`/"Unhandled exception" in a `+seh` Wine log before concluding "it quit on purpose"; absence in a truncated 160-line tail is not absence.
+- **Learning**: (4) The `cl_filterstuffcmd` blocklist is the engine's OWN enumeration of "commands too dangerous to accept from a server" — anything locally-dangerous that's NOT on it (e.g. `host_killtime`) is latent client-attack surface worth cataloguing even when no server currently abuses it.
+- **Rule**: For "process vanished" on a headless target, instrument the live state globals (read them every <frame via /proc/mem) BEFORE theorizing a static cause; let the runtime values pick among the candidate paths the static map produced. Map once, measure, then attribute — never attribute from the map alone.
+- **Tooling note**: GhidraMCPHeadlessServer (com.xebyte) cannot `import_file` ("requires GUI mode"); import via `analyzeHeadless <projdir> <name> -import <bin> -overwrite` on the CLI, then point the server at it with `open_project`+`load_program_from_project`. Put the project OUTSIDE any Docker bind-mount (the 9p divergence ate the prior `research/cs16-re`).
+
+## 2026-06-07: managed .NET → ILSpy, not Ghidra (don't waste a session loading CIL)
+- **Context**: RE of s&box "code protection" addons (SCFU obfuscator, Secbox scanner). Their real engines are off-platform binaries (`scfu.dll`, `Secbox.*.dll`).
+- **Learning**: These are **managed .NET assemblies**, not native — `file` says "Mono/.Net assembly". Ghidra's CIL decompilation is poor; **ILSpy/`ilspycmd` reconstructs near-original C#** (got 33k clean lines out of `scfu.dll`, incl. namespaces/signatures). The matching `scfu.exe` was a **native apphost launcher** (`file`: "PE32+ ... x86-64") — a generic .NET bootstrapper, zero RE value. So: `file` FIRST; managed `.dll` → ILSpy; ignore the apphost `.exe`.
+- **Install (no dotnet/ilspycmd in this container; no /mnt/c interop)**:
+  1. `curl -fsSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0 --install-dir ~/.dotnet --no-path`
+  2. `~/.dotnet/dotnet tool install -g ilspycmd --version 9.1.0.7988` (unpinned/`10.1.x` fail "DotnetToolSettings.xml not found"; `8.2.x` crashes on net10 metadata via `System.Version.ToString(fieldCount)` — **9.1.0.7988 works**).
+  3. EVERY run: `export DOTNET_ROOT=$HOME/.dotnet PATH=$HOME/.dotnet:$HOME/.dotnet/tools:$PATH DOTNET_ROLL_FORWARD=LatestMajor` (tool targets net6, runtime is net8).
+  4. `ilspycmd foo.dll -o .` → `foo.decompiled.cs` (single-file; project mode `-p` throws on newer TargetFramework metadata).
+- **Bonus**: to pull an **embedded manifest resource** out of a .NET assembly without running it, a ~30-line C# tool using `System.Reflection.PortableExecutable.PEReader` + `MetadataReader.ManifestResources` (read `CorHeader.ResourcesDirectory`, then per-resource length-prefixed blob) dumps it — used to recover SCFU's 16-byte string-XOR key table.
+- **Rule**: Ghidra is for native. Triage with `file` before loading anything; a managed assembly belongs in ILSpy, and its sibling apphost `.exe` is a throwaway.
+
+## 2026-07-16: `current_program` is a STALE NAME — /load_program does not switch to it, and it survives close
+- **Context**: Diffing two CSNZ `hw.dll` builds (Steam vs a third-party private server). Both files are literally named `hw.dll`.
+- **Learning**: (1) **`/load_program` (and the `load_program` tool) does NOT make the loaded program current.** The server keeps a separate `current_program` *name*, and every tool that omits `program=` resolves against it. After loading a second binary, `list_open_programs` showed the new program with `is_current: false` while `current_program` still named the old one — so `list_strings`/`get_xrefs_to`/`decompile_function` all silently kept answering **from the previous binary**. The results look perfectly plausible (same addresses, same xrefs) because they ARE real — just from the wrong file. Nothing errors.
+- **Learning**: (2) **`get_current_program_info` returns CACHED data for a program that no longer exists.** After `/close_program name=hw.dll` succeeded and only `hw_csns.dll` remained open, `get_current_program_info` still reported `name: hw.dll`, the closed binary's `executable_path`, and its `function_count`/`memory_size`. It is NOT a source of truth. `list_open_programs` is — and its `count`/`is_current`/`current_program` fields disagreeing with each other is the tell.
+- **Learning**: (3) **Two binaries with the same basename collide.** Loading the second returned `{"success": true}`, but only one program ever existed (a second `/close_program name=hw.dll` said "Program not found"). Same-name loads are silently lossy — copy to distinct filenames (`hw_steam.dll`, `hw_csns.dll`) before loading.
+- **Learning**: (4) On this v4.0.0-headless server `run_analysis` is a **no-op** on a `/load_program`'d program: returned `duration_ms: 1, new_functions: 0` against a 271-function minimal load. A previously-analyzed program returning ~89k functions in ~300ms is likewise reporting a *cached* count, not a fresh pass. So `run_analysis` "succeeding" instantly proves nothing.
+- **Learning**: (5) The minimal-load workaround from `reference/headless-operations.md` works fine without any analysis: `search_byte_patterns(<ascii hex of the string>)` -> VA, then `search_byte_patterns(<VA as little-endian>)` -> the `PUSH <straddr>` site, then `read_memory` around it and decode by hand. Recovered a full id->name table this way in 4 calls, no analysis, no hang risk.
+- **Rule**: In ANY multi-binary session: (a) copy inputs to **distinct basenames** first; (b) after loading, call **`switch_program(name)`** — loading alone does not switch; (c) verify with **`list_open_programs`** (`is_current: true` on the one you want), NEVER `get_current_program_info`, which lies about closed programs; (d) prefer passing **`program=` explicitly** on every call so `current_program` can't matter. If two queries against "different" binaries return byte-identical addresses, assume you are reading one binary until `list_open_programs` proves otherwise.

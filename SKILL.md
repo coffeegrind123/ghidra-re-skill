@@ -1,6 +1,6 @@
 ---
 name: ghidra-re
-description: Reverse engineer, decompile, and analyze binaries using 245 Ghidra MCP tools. Covers function documentation, data type investigation, orphaned code discovery, call graph analysis, struct creation, variable renaming, binary reconnaissance, and malware analysis. Use when the user mentions Ghidra, decompilation, disassembly, binary analysis, DLL/EXE investigation, function renaming, malware analysis, or references function addresses like 0x401000. Do NOT use for source-level debugging, dynamic analysis, or non-Ghidra RE tools.
+description: Reverse engineer, decompile, and analyze NATIVE binaries using 245 Ghidra MCP tools. Covers function documentation, data type investigation, orphaned code discovery, call graph analysis, struct creation, variable renaming, binary reconnaissance, and malware analysis. Use when the user mentions Ghidra, decompilation, disassembly, binary analysis, DLL/EXE investigation, function renaming, malware analysis, or references function addresses like 0x401000. Do NOT use for source-level debugging, dynamic analysis, non-Ghidra RE tools, or MANAGED .NET assemblies (use ILSpy/ilspycmd for those — see rule 0).
 allowed-tools: mcp__ghidra__* Bash(curl:*)
 when_to_use: "Use when the user wants to reverse engineer or analyze a binary with Ghidra. Examples: 'analyze this binary', 'decompile this function', 'what does this DLL do', 'document all functions', 'find hidden functions', 'create a struct', 'trace the call graph', 'check for malware', 'rename this function at 0x401000'."
 argument-hint: "[function address, binary path, or task description]"
@@ -12,6 +12,8 @@ metadata:
 # Ghidra MCP Reverse Engineering
 
 ## General Rules
+
+0. **Triage first — is it even native?** Run `file` on the target before loading it into Ghidra. Ghidra is for **native** code (PE/ELF/Mach-O machine code). A **managed .NET assembly** (`file` reports "Mono/.Net assembly", or it references `Microsoft.CodeAnalysis`/`System.*`) decompiles far better with **ILSpy / `ilspycmd`**, which reconstructs near-original C#; Ghidra's CIL output is poor and slow. Heads-up: a .NET single-file app ships a tiny **native apphost `.exe`** (a generic launcher — not worth REing) next to the real managed `.dll` — RE the `.dll` with ILSpy. Only stay in Ghidra when the binary is genuinely native. Install recipe + details in LEARNINGS (2026-06-07).
 
 1. **Pre-flight**: Always `check_connection` before any session work. Without this, all subsequent MCP calls will fail silently or with cryptic errors.
 
@@ -34,6 +36,10 @@ metadata:
 10. **Autonomy**: Execute RE workflows without asking for confirmation at each step. Ask only when the binary's purpose or a function's behavior is genuinely ambiguous.
 
 11. **Atomic variable operations**: `set_variables` is the preferred tool for atomic type+rename operations. It eliminates SSA churn from separate type-set and rename calls, reducing decompiler re-analysis cycles.
+
+12. **Multi-binary discipline — loading is NOT switching**: `load_program`/`import_file` do NOT make the new binary current. The server keeps a separate `current_program` **name**, and every tool omitting `program=` resolves against it — so after loading a second binary your queries keep answering **from the first one, silently and plausibly**. Also: two files with the same basename collide (the second load reports success but does not exist). Always: copy inputs to **distinct basenames** -> load -> **`switch_program(name)`** -> verify with **`list_open_programs`** that `is_current: true`. Pass `program=` explicitly on every call in a multi-binary session. **Never trust `get_current_program_info`** — see rule 13.
+
+13. **`get_current_program_info` lies about closed programs**: it returns CACHED data (name, `executable_path`, `function_count`) for a program that has already been closed. `list_open_programs` is the only source of truth; the tell is its `count`/`is_current`/`current_program` fields disagreeing with each other, or `current_program` naming a program absent from `programs[]`. **Red flag**: if queries against two "different" binaries return byte-identical addresses, you are reading one binary — verify before believing any of it.
 
 ## v5 Breaking Changes (current: v5.12.0)
 
@@ -191,9 +197,18 @@ For each: `create_function` -> `decompile_function` (sanity check) -> `set_plate
 | `set_local_variable_type` rejects no-op | Type must actually change | Verify current type differs from target before calling |
 | `add_struct_field` replaceAtOffset | Overlays undefined bytes | Only works on undefined/padding bytes — remove existing field first if occupied |
 | `check_tools` returns `not_loaded` | Tool group not active | Use `connect_instance` or `load_tool_group` to activate |
+| Queries on a newly-loaded binary return the OLD binary's data | Loading does not switch; `current_program` still names the previous program | `switch_program(name)`, verify `is_current: true` via `list_open_programs`, or pass `program=` explicitly |
+| Two "different" binaries give identical addresses/xrefs | You are reading one binary | `list_open_programs` — do not trust `get_current_program_info` |
+| `get_current_program_info` shows a closed/wrong program | It returns cached data for a dead program | Use `list_open_programs` as source of truth |
+| Second load of a same-named file "succeeds" but isn't there | Basename collision — silently lossy | Copy to distinct basenames (`hw_steam.dll`, `hw_csns.dll`) and reload |
+| `run_analysis` returns in ~1ms with `new_functions: 0` | No-op on a `load_program`'d program (v4 headless); a huge count returned instantly is a CACHED count | Don't assume it analyzed. Use the byte-pattern workaround (see Pitfalls) or `analyzeHeadless` on the CLI |
 
 ## Critical Pitfalls
 
+- Do NOT assume a loaded binary is the current one — loading does not switch. `switch_program` + verify via `list_open_programs`, or pass `program=` explicitly. Wrong-binary answers do not error; they look correct
+- Do NOT load two files with the same basename — the second silently does not exist. Copy to distinct names first
+- Do NOT trust `get_current_program_info` — it returns cached data for closed programs. `list_open_programs` is the source of truth
+- Do NOT conclude `run_analysis` analyzed anything because it "succeeded" — ~1ms/`new_functions: 0` is a no-op, and an instant ~89k count is cached. When analysis is unavailable, skip it: `search_byte_patterns(<ascii hex of a string>)` -> VA, then `search_byte_patterns(<VA little-endian>)` -> the `PUSH <addr>` site, then `read_memory` and decode by hand. No analysis, no hang risk
 - Do NOT use GUI tools in headless mode — `launch_codebrowser`, `goto_address`, `get_current_selection` will fail or return meaningless results
 - Always use `import_file` to load binaries — it runs `analyzeHeadless` directly
 - Do NOT set comments before prototype — `set_function_prototype` WIPES plate comments. Always: types -> names -> prototype -> comments
