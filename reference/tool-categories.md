@@ -1,8 +1,8 @@
-# Ghidra MCP Tool Reference (245 Tools)
+# Ghidra MCP Tool Reference (~222 Tools)
 
 ## Tool Categories from /mcp/schema
 
-v5.12.0 uses dynamic tool discovery via bridge: ~245 tools auto-registered from `/mcp/schema` plus the static bridge tools. The categorized list below covers the v5.0.0 core surface and is a navigation guide — the live `/mcp/schema` is authoritative for the full v5.12.0 set.
+v6.0.0 uses dynamic tool discovery via bridge: on a headless server ~214 tools are auto-registered from `/mcp/schema` plus 8 static bridge tools (~222 exposed). The release ships 272 tools in total; the remainder are GUI-only. The categorized list below is a navigation guide — the live `/mcp/schema` is authoritative.
 
 ## Analysis (17 tools)
 | Tool | Purpose |
@@ -202,7 +202,7 @@ These are always available regardless of tool group loading:
 
 | Tool | Purpose |
 |------|---------|
-| `check_connection` | Verify MCP bridge connectivity |
+| `list_instances` | Verify MCP bridge connectivity and see the attached instance (`check_connection` is an HTTP endpoint, not a tool, as of v6.0.0) |
 | `list_instances` | List available Ghidra instances |
 | `connect_instance` | Connect to a specific Ghidra instance |
 | `load_tool_group` | Load a tool category on demand |

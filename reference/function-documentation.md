@@ -68,7 +68,7 @@ Use `set_variables` for atomic type+rename operations. This is preferred over se
 
 **Struct creation gate**: Reuse existing structs first (`search_data_types`). Only create new structs when 3+ validated fields exist across 2+ code paths.
 
-Use `search_data_types` to find matching types. If none exist, create with `create_struct`. Fix duplicates with `consolidate_duplicate_types`.
+Use `search_data_types` to find matching types. If none exist, create with `create_struct`. (`consolidate_duplicate_types` is **not available on a v6 headless server** — confirm with `check_tools` before reaching for it.)
 
 Note: `add_struct_field` with `replaceAtOffset` behavior overlays undefined bytes only — remove existing fields first if the offset is occupied.
 

@@ -1,6 +1,24 @@
-# Ghidra RE Skill Learnings
+# Ghidra RE Skill Learnings — STAGING, not a destination
 
-Append-only log of non-obvious discoveries from Ghidra reverse engineering sessions.
+Scratch buffer for non-obvious discoveries from RE sessions. **A learning that sits here is
+not doing any work** — nothing reads this file during a session.
+
+**The job is to APPLY it into the skill, then delete it from here:**
+
+| Kind of learning | Where it belongs |
+|---|---|
+| A rule to follow every session | `SKILL.md` → General Rules |
+| "X looks like Y but is actually Z" | `SKILL.md` → Critical Pitfalls |
+| A symptom you can observe | `SKILL.md` → Error Handling table (symptom / diagnosis / fix) |
+| Depth on loading, addressing, searching | `reference/headless-operations.md` |
+| A tool misbehaving | `reference/gotchas.md` |
+| Workflow depth | the matching `reference/*.md` |
+
+Entries below are **unapplied backlog**. Fold them in and remove them. Do not let this file
+grow — length here is a measure of neglect, not of knowledge.
+
+⚠ Anything in `SKILL.md` that says "see LEARNINGS" is itself a bug: the knowledge should be
+inline where it is needed, not a pointer into staging.
 
 ## 2026-06-02: v5.12.0 headless quirks + cross-binary offset porting
 - **Context**: RE of 32-bit Windows DLLs on the v5.12.0 headless server.
@@ -142,17 +160,6 @@ Append-only log of non-obvious discoveries from Ghidra reverse engineering sessi
 - **Learning**: (4) The `cl_filterstuffcmd` blocklist is the engine's OWN enumeration of "commands too dangerous to accept from a server" — anything locally-dangerous that's NOT on it (e.g. `host_killtime`) is latent client-attack surface worth cataloguing even when no server currently abuses it.
 - **Rule**: For "process vanished" on a headless target, instrument the live state globals (read them every <frame via /proc/mem) BEFORE theorizing a static cause; let the runtime values pick among the candidate paths the static map produced. Map once, measure, then attribute — never attribute from the map alone.
 - **Tooling note**: GhidraMCPHeadlessServer (com.xebyte) cannot `import_file` ("requires GUI mode"); import via `analyzeHeadless <projdir> <name> -import <bin> -overwrite` on the CLI, then point the server at it with `open_project`+`load_program_from_project`. Put the project OUTSIDE any Docker bind-mount (the 9p divergence ate the prior `research/cs16-re`).
-
-## 2026-06-07: managed .NET → ILSpy, not Ghidra (don't waste a session loading CIL)
-- **Context**: RE of s&box "code protection" addons (SCFU obfuscator, Secbox scanner). Their real engines are off-platform binaries (`scfu.dll`, `Secbox.*.dll`).
-- **Learning**: These are **managed .NET assemblies**, not native — `file` says "Mono/.Net assembly". Ghidra's CIL decompilation is poor; **ILSpy/`ilspycmd` reconstructs near-original C#** (got 33k clean lines out of `scfu.dll`, incl. namespaces/signatures). The matching `scfu.exe` was a **native apphost launcher** (`file`: "PE32+ ... x86-64") — a generic .NET bootstrapper, zero RE value. So: `file` FIRST; managed `.dll` → ILSpy; ignore the apphost `.exe`.
-- **Install (no dotnet/ilspycmd in this container; no /mnt/c interop)**:
-  1. `curl -fsSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0 --install-dir ~/.dotnet --no-path`
-  2. `~/.dotnet/dotnet tool install -g ilspycmd --version 9.1.0.7988` (unpinned/`10.1.x` fail "DotnetToolSettings.xml not found"; `8.2.x` crashes on net10 metadata via `System.Version.ToString(fieldCount)` — **9.1.0.7988 works**).
-  3. EVERY run: `export DOTNET_ROOT=$HOME/.dotnet PATH=$HOME/.dotnet:$HOME/.dotnet/tools:$PATH DOTNET_ROLL_FORWARD=LatestMajor` (tool targets net6, runtime is net8).
-  4. `ilspycmd foo.dll -o .` → `foo.decompiled.cs` (single-file; project mode `-p` throws on newer TargetFramework metadata).
-- **Bonus**: to pull an **embedded manifest resource** out of a .NET assembly without running it, a ~30-line C# tool using `System.Reflection.PortableExecutable.PEReader` + `MetadataReader.ManifestResources` (read `CorHeader.ResourcesDirectory`, then per-resource length-prefixed blob) dumps it — used to recover SCFU's 16-byte string-XOR key table.
-- **Rule**: Ghidra is for native. Triage with `file` before loading anything; a managed assembly belongs in ILSpy, and its sibling apphost `.exe` is a throwaway.
 
 ## 2026-07-16: `current_program` is a STALE NAME — /load_program does not switch to it, and it survives close
 - **Context**: Diffing two CSNZ `hw.dll` builds (Steam vs a third-party private server). Both files are literally named `hw.dll`.

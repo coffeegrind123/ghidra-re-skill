@@ -1,6 +1,6 @@
 # ghidra-re
 
-An [Agent Skill](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills/overview) for reverse engineering binaries with [Ghidra MCP](https://github.com/bethington/ghidra-mcp) v5.12.0 (245 tools via Python bridge).
+An [Agent Skill](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills/overview) for reverse engineering binaries with [Ghidra MCP](https://github.com/bethington/ghidra-mcp) v6.0.0 (~222 tools via the Python bridge wheel; 272 shipped, the rest GUI-only).
 
 ## What it does
 
@@ -49,7 +49,7 @@ ghidra-re/
 ├── LEARNINGS.md                          # Append-only refinement log
 ├── README.md
 └── reference/
-    ├── tool-categories.md                # All 245 MCP tools by category
+    ├── tool-categories.md                # MCP tools by category (~222 headless)
     ├── function-documentation.md         # V5 protocol (single + batch)
     ├── data-type-investigation.md        # Struct discovery via usage analysis
     ├── orphaned-code-discovery.md        # 3-pass gap scanner, types A-G
