@@ -89,6 +89,17 @@ GhidraMCP v5+ uses a bridge with dynamic tool discovery instead of the v4 hardco
 - **Absent from the v6 headless surface** (verified against a live `/mcp/schema`, Ghidra 12.0.3). Some are GUI-only, some are gone; either way `check_tools` returns `not_found` here:
   `check_connection`, `batch_rename_variables`, `batch_set_variable_types`, `consolidate_duplicate_types`, `search_memory_strings`, `run_script`, `project_info`, `export_system_knowledge`, `store_function_knowledge`, and the GUI navigation tools (`launch_codebrowser`, `goto_address`, `get_current_selection`, `get_current_address`, `get_current_function`).
   ⚠ When one of these fails, it is a **missing tool**, not a broken bridge or a failed analysis — the two look identical from the error alone. `search_tools` confirms what actually exists before you build a workflow on a remembered name.
+- **Parameter descriptions are mostly missing at call time — do not read that as "undocumented".** The tool descriptions arrive fine, but ~800 of the bridge's parameters reach you with no description, so a parameter's format, units, and accepted values often look unspecified. **The server usually does document them** — it publishes descriptions for 415 of 689 parameters in `/mcp/schema`, and the bridge drops them building `inputSchema` (upstream fix pending: bethington/ghidra-mcp#425). When a parameter's format is unclear, do NOT guess and do NOT infer it from the name: read the real text with `search_tools`, or go straight to the source —
+  ```sh
+  # every param of one tool, with the descriptions the tool call never showed you
+  curl -s http://127.0.0.1:8089/mcp/schema | python3 -c "
+  import sys,json
+  for t in json.load(sys.stdin)['tools']:
+      if t['path']=='/search_functions_enhanced':
+          for p in t['params']: print(f\"{p['name']:24}{p.get('description','(undocumented)')}\")"
+  ```
+  (`search_functions_enhanced` documents 10 of its 12 parameters server-side and shows none of them at the tool call — a representative case, not a cherry-picked one.)
+  Guessing an address format or an enum value here is the single most likely way to produce a call that fails cryptically or, worse, silently does the wrong thing.
 - **`batch_rename_variables` renamed to `rename_variables`**: The old name no longer exists. Use `rename_variables` for all variable rename operations.
 - **`set_variables` is new**: Atomic type+rename in one call. Preferred over separate `batch_set_variable_types` + `rename_variables` to avoid SSA churn.
 - **`batch_set_comments` arrays now optional**: `decompiler_comments` and `disassembly_comments` arrays are optional — you can pass only `plate_comment` if that's all you need.
