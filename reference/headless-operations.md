@@ -134,6 +134,53 @@ Ghidra auto-analysis may miss functions (common in Delphi/BCB binaries):
 3. `create_function` at the prologue address
 4. `decompile_function` to get pseudocode
 
+## Enabling `run_script_inline` (the bulk-extraction lever)
+
+`/run_script_inline` is gated by **`GHIDRA_MCP_ALLOW_SCRIPTS=1`** and defaults to OFF, because it
+executes arbitrary Java inside the Ghidra process. Two things about the gate are easy to get
+wrong and cost a lot of time:
+
+- **The JAVA server reads it, not the Python bridge**, and it reads it **at process start**. So
+  it cannot be turned on from the client, mid-session, or by re-connecting. The bridge does not
+  spawn the server (there is no `Popen` in it) — a launcher backgrounds Java and then `exec`s
+  the bridge, which is why `ps` shows Java as the bridge's *child* and why Java inherits the
+  launcher's environment.
+- **The bridge tolerates the server restarting** (`dispatch.py::_try_reconnect`, "reconnect to
+  the previously connected project after Ghidra restarts"). So the fix is: restart the Java
+  process with the flag, on the same port, and carry on — no Claude Code restart needed.
+
+```sh
+# capture the EXACT argv so the relaunch differs only in environment
+tr '\0' '\n' < /proc/<javapid>/cmdline > /tmp/argv.txt
+# ...kill <javapid>, wait for :8089 to free, then re-exec argv with:
+#   GHIDRA_MCP_ALLOW_SCRIPTS=1
+curl -s http://127.0.0.1:8089/check_connection      # readiness (~10s)
+tr '\0' '\n' < /proc/<newpid>/environ | grep ALLOW_SCRIPTS   # PROVE the flag took
+```
+
+⚠ **A restart drops every loaded program** — reload after. ⚠ The port is shared, so a restart
+disturbs any other session using Ghidra; it is recoverable (they reconnect), but it is not free.
+For a permanent fix, set it where the server is launched (in this setup,
+`launch_ghidra_mcp.py` passes an `env=` to `Popen`).
+
+### Writing the script: it is a BODY, not a class
+
+The `code` parameter is wrapped by the server in its own generated class. Passing a full
+`public class X extends GhidraScript { public void run() {...} }` fails to compile with
+`illegal start of expression` pointing at your class declaration — which reads like a Java
+syntax error in your code and is not one.
+
+```java
+// correct — bare statements; currentProgram / println / getInstructionAt already in scope
+println("image_base=" + currentProgram.getImageBase());
+println("functions=" + currentProgram.getFunctionManager().getFunctionCount());
+```
+
+⚠ **A failed compile is sticky.** Ghidra rebuilds all of `~/ghidra_scripts` on every run, so one
+broken file makes *every later script* print that same stale error — including scripts that then
+run fine. Delete the offender (`rm ~/ghidra_scripts/<Broken>.java*`) and read past the noise
+before concluding your new script is broken.
+
 ## Server Management
 
 - Start: `bash /opt/ghidra-mcp/run-mcp.sh`
