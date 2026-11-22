@@ -1,139 +1,99 @@
-# GhidraMCP Gotchas
+# Gotchas
 
-Hard-won, non-obvious failure modes — mostly headless-server and v4→v5 quirks.
-Read this when a tool behaves unexpectedly (empty results, "failed", timeouts).
-Append new ones as you hit them; promote durable rules into SKILL.md.
+Non-obvious failure modes: Ghidra behaviour, this server's transaction model, and RE practice.
+Read this when a tool behaves unexpectedly. Promote durable rules into SKILL.md.
 
-## Loading & analysis
+## Transactions, batch and execute
 
-- **`load_program` "times out" at ~30s but keeps working.** The HTTP layer caps at
-  30s; the import + auto-analysis continue server-side. Do NOT retry (you'll queue a
-  second load). Poll `analysis_status` / `list_open_programs` until `analyzing:false`.
+- **One failing op discards the whole batch.** That is the point, but it means a single
+  phantom variable or stale name costs every other edit in the batch. The error carries
+  `op_index`, `tool` and `error_type`: fix that op and resend. `dry_run=true` checks a plan
+  without keeping anything.
+- **A renamed symbol's old name is gone inside the same batch.** `FUN_00401000` used as an
+  address after `rename_function` fails with `NotFound`. Use `"$N.address"` from the rename.
+- **`$N` must point backwards.** A reference to the current or a later op fails with
+  `InvalidReference`. A whole-string `"$N.path"` keeps the JSON type (int stays int);
+  `"${N.path}"` inside a longer string becomes text.
+- **Refused inside batch (`InvalidOp`)**: `open_database`, `close_database`,
+  `save_database`, `wait_for_analysis`, `undo`, `redo`, `run_auto_analysis`,
+  `reanalyze_range`, `set_image_base`, `run_ghidra_script`, `list_targets`, and the meta
+  tools. Most of these are also missing from `tools.<name>` inside `execute` (AttributeError).
+  Call them on their own.
+- **`revision` moves on every transaction, including rolled-back ones.** Take the revision
+  from your latest result (success or error), not from an earlier read, before passing
+  `if_revision`.
+- **`operation_id` replays only successful writes.** A retry with the same id after a failure
+  runs again. Results of the last 256 successful writes are kept per worker.
+- **`execute` timeout is checked between Python lines.** One long Java call (a decompile of a
+  huge function, a big memory scan) can overrun `timeout_s`. Break long work into Python-level
+  loops.
+- **`execute` returns `str()` of Java objects.** Build plain dicts, lists, ints and strings
+  yourself. Java `byte` values are signed in Python: `b & 0xFF`.
+- **`execute` output caps**: stdout 64 KiB, result 256 KiB (`truncated` says so). Return
+  counts and the first N items, not everything.
+- **`run_ghidra_script` has no time limit.** A running Java script cannot be interrupted; an
+  endless loop blocks that database until the server restarts.
+- **Nothing is on disk until `save_database`.** Batches, execute and scripts change the open
+  program only. `close_database` saves by default.
 
-- **`reanalyze` → `"Auto-analysis failed"` usually means analysis is ALREADY running**
-  (e.g. the one `load_program` auto-started), not a real failure. Confirm with
-  `analysis_status` (`analyzing:true`, watch `function_count` climb). `run_analysis`
-  on an already-analyzed program returns instantly with `new_functions:0` — that's it
-  reporting persisted state, not re-running.
+## Types and prototypes
 
-- **v5.x headless auto-analysis can throw `NullPointerException`
-  (`GhidraScriptUtil.bundleHost is null`, `ProgramScriptService`) and roll back** —
-  `function_count` reverts to the initial export count and `analyzed` stays `false`.
-  BUT partial analysis (functions, strings, xrefs) often persists and is usable; call
-  `run_analysis` to read the persisted state, then proceed. Symptom in the poll:
-  count climbs (e.g. →5857) then drops back (→308). Check `/tmp/ghidra-mcp-server.log`
-  for the NPE to distinguish this from a real OOM (memory was fine in our case).
+- **`uint8_t`, `size_t` and SDK typedefs fail to parse** unless a type archive defines them:
+  `int f(uint8_t *buf, size_t len)` raises a C ParseException; `int f(byte *buf, uint len)`
+  works. Use Ghidra builtins.
+- **Plate comments survive `set_function_prototype`** on this server (measured). Older notes
+  that a prototype change wipes plate comments do not apply here.
+- **Re-read locals after a prototype change.** It re-runs the decompiler; take local names
+  from a fresh `list_decompiler_variables`, not from one read before the change.
+- **The decompiler's display type can differ from the stored type.** Trust
+  `list_decompiler_variables`, and set types explicitly.
+- **`apply_type_at_address` needs the exact, case-sensitive type name**; `set_type` accepts C
+  spellings (`char *`, `unsigned short`) and matches names case-insensitively.
 
-- **Low `-Xmx` is NOT always the cause of analysis failure.** A 12 MB program analyzed
-  fine under `-Xmx2g`; the rollback above was the bundleHost NPE, not heap. Check the
-  server log before bumping heap.
+## Strings and xrefs
 
-## Strings
+- **Strings and xrefs exist only after the analyzers that create them ran.** On a program
+  opened without auto-analysis, `list_strings` and `get_xrefs_to` can be nearly empty. Run
+  `run_auto_analysis`, or search raw bytes (`search_bytes` with the string's ASCII hex).
+- **Test a negative with a positive control.** Before concluding "this string is never used",
+  run the same search for a string you know is used.
+- **`get_xrefs_to` reaching its `limit`** (default 100) is a signal: a global with 100+
+  references is a central state or config variable.
 
-- **`search_strings` returns ZERO matches unless you pass `encoding: "ascii"`.** The
-  default (empty) encoding matches nothing — you'll think the binary has no strings.
-  Always pass `encoding:"ascii"` (or `"unicode"`). The older `list_strings` (filter
-  param) did not need this.
+## Addresses and porting between builds
 
-- **Strings/xrefs are only populated once the relevant analyzers finish.** If
-  `search_strings`/`get_xrefs_to` come back empty right after load, analysis is
-  probably still running (or rolled back per the NPE above) — re-check status.
+- **Ghidra addresses include the image base.** Read `image_base` from `get_database_info`;
+  RVA = Ghidra address - image base, live address = runtime base + RVA. PE EXEs commonly base
+  at `0x400000` and DLLs at `0x10000000`, but read the actual value: a relocated module loads
+  at a different runtime base than its preferred one.
+- **Porting offsets between two builds of one codebase**: anchor ONE global in the new build
+  via a unique nearby string (find the string, follow its xref to the function that uses the
+  global), then apply the known internal struct deltas from the reference build and check each
+  derived address lands on a sane global. Deltas survive global-base shifts only if the struct
+  layout is unchanged; after a major version bump, re-verify each field.
 
-## Headless vs GUI
+## Live-memory RE: match the exact binary the target maps
 
-- **GUI-only tools fail on the headless server**: `create_project`, `open_program`,
-  `list_project_files`, `project_info`, `launch_codebrowser`, `goto_address`,
-  `get_current_selection` return "requires GUI mode". Use the **HTTP-only endpoints**
-  on port 8089 instead — `POST /load_program?file=...`, `POST /create_project`,
-  `GET /get_project_info`, `GET /analysis_status?program=NAME` — via curl. (In v5.12.0
-  `load_program` is also exposed as an MCP tool.)
+- **Reverse the exact binary the live process maps, not a same-named local copy.** Offsets
+  from one build are garbage against another. Compare `md5sum` and size of the analyzed file
+  against the one in `/proc/<pid>/maps` (or pull the mapped file out and analyze that). For a
+  stable harness, pin the target's version and reverse that build once.
+- **All-zero reads at a plausible base do not prove a wrong offset.** It usually means the
+  wrong binary or a global not yet initialized. If several independent globals also read 0
+  while the process clearly runs, suspect a build mismatch before your offset math.
 
-- **Older servers (v4.0.0-headless) lack `import_file`** — there is no MCP load tool;
-  use the HTTP `/load_program` endpoint. v5.12.0 adds `load_program` + `import_file`.
+## Wine crash-triage misreads
 
-- **Write tools could silently fail with `"<arg> is required"` on v4.0.0-headless even
-  when the arg was supplied** (`rename_function`, `rename_function_by_address`) — a
-  param-threading bug in that build. Read tools were unaffected. Fixed by v5.12.0.
-
-## Server / versioning
-
-- **The headless server runs from the JAR on `run-mcp.sh`'s `JAR_PATH` classpath, NOT
-  the extension in `$GHIDRA_HOME/Extensions`.** A version mismatch between the
-  installed extension and the running JAR is possible and harmless for headless.
-
-- **Editing server files does not hot-swap the running process.** To change the server
-  version/heap, edit `run-mcp.sh` then reconnect the MCP (`/mcp` → reconnect, or
-  restart the client). The live process keeps its old config until then.
-
-- **GhidraMCP releases are built against a specific Ghidra version** (e.g. v5.12.0 →
-  Ghidra 12.1). Running the JAR against an older framework risks `NoSuchMethod` at
-  boot — match them. The **release extension ZIP's `lib/GhidraMCP-<ver>.jar` already
-  contains the `com.xebyte.headless` server classes**, so no Maven build is needed:
-  point `JAR_PATH` at it and run. Pre-flight a new server on an alt port before
-  reconnecting the live one.
-
-## Addresses & cross-binary porting
-
-- **Ghidra addresses are image-base-relative.** Read the base from
-  `list_open_programs` / `get_current_program_info` (`image_base`); then
-  RVA = Ghidra address − image base, and live address = runtime base + RVA. PE EXEs
-  commonly base at `0x400000` and DLLs at `0x10000000`, but always read the actual
-  value — don't assume (a relocated module loads at a different runtime base than its
-  preferred image base).
-
-- **Porting offsets between two builds of the same product:** anchor ONE global in the
-  new binary via a unique nearby string (find the string, xref it to the function that
-  references the global), then apply the known *internal struct deltas* from the
-  reference build and verify each derived address lands on a sane global. Deltas survive
-  global-base shifts — but ONLY if the struct layout is unchanged; a major version bump
-  can move fields, so re-verify each field on the new build rather than trusting deltas.
-
-- **`get_xrefs_to` capping at the `limit`** (default 100) is itself signal — a global
-  with 100+ xrefs is a heavily-used state/config variable, which helps confirm you
-  found the right one.
-
-## Live-memory RE: match the EXACT binary the target maps
-
-- **RE the exact binary the live process maps — not a same-named local copy.** Offsets
-  from one build are garbage against a different build of the same product. ALWAYS
-  `md5sum` / size-compare the file you analyzed against the one mapped in the target
-  (e.g. from `/proc/<pid>/maps`, or pull it out of the live environment and RE *that*).
-  Same filename, different bytes ⇒ different layout. For a stable harness, pin the
-  target's exact version and RE that build once.
-- **All-zero reads at a plausible base ≠ wrong offset.** It usually means wrong-binary
-  OR the target hasn't initialized that global yet. Distinguish: if several
-  *independent* globals also read 0 while the process is demonstrably running, suspect a
-  binary/build mismatch over your offset math.
-
-## More analysis/strings quirks (v5.12.0)
-
-- **`search_strings` can return empty for a while after load even with
-  `encoding:"ascii"` — the ASCII Strings analyzer is a LATER phase; give it time.** Poll
-  `analysis_status` until `function_count` stops climbing AND a known string resolves.
-  `load_program` kicks off async analysis; `function_count` jumps (e.g. 318 → 4105) as
-  it runs. `run_analysis` returning `new_functions:0, duration ~3ms` with a high
-  `total_functions` means analysis already finished (reporting persisted state) — but
-  defined strings may still be a beat behind the function count.
-- **Fallback when defined strings aren't ready: `search_memory_strings`** (raw memory
-  scan, analyzer-independent) finds string bytes regardless of analysis state.
-- **On v5.12.0 use the MCP `load_program` tool, not the HTTP `/load_program` endpoint**
-  — the HTTP param changed (`file=` now returns `"file path required"`); the MCP tool
-  `load_program({file:"/abs/path"})` works.
-
-## Wine crash-triage misreads (cost real time)
-
-- **"Process terminated cleanly" ≠ no crash.** If a Wine guest installs a top-level handler
-  (`SetUnhandledExceptionFilter` / a `__try` around the frame loop) that CATCHES an access
-  violation and exits via its own shutdown, the process exit looks orderly and `winedbg --auto`
-  / interactive winedbg break on NOTHING (they only act on *unhandled* / silently pass
-  first-chance). It still crashed. Catch it with **gdb attached + `catch signal SIGSEGV`** (host
-  SIGSEGV fires before the guest handler) — see dynamic-analysis.md §2.
-- **The post-crash "Missing shutdown function for X : Y" / "File … never closed" storm is a red
-  herring.** Those are `code=40010006` (`OutputDebugString`) lines from the engine's normal
-  `Sys_Shutdown` audit that runs on ANY quit — not the fault. Grep for the single `code=c0000005`
-  ABOVE them. Reading the shutdown audit (or the last `loading <x>` line) as the crash site points
-  you at the wrong subsystem.
-- **Don't NOP a guest's `SetUnhandledExceptionFilter` call to "force" the crash unhandled.** In an
-  MSVCRT-static binary the (usually two) call sites are CRT internals — install the CRT filter, then
-  restore the previous — and NOPping them corrupts CRT exception setup and breaks boot. Use a
-  host-level SIGSEGV catcher (gdb/ptrace) instead.
+- **"Process terminated cleanly" does not mean no crash.** If a Wine guest installs a top-level
+  handler (`SetUnhandledExceptionFilter` / a `__try` around the frame loop) that catches an
+  access violation and exits through its own shutdown, the exit looks orderly and
+  `winedbg --auto` / interactive winedbg break on nothing (they act only on unhandled or pass
+  first-chance silently). Catch it with gdb attached and `catch signal SIGSEGV`: the host
+  SIGSEGV fires before the guest handler. See [dynamic-analysis.md](dynamic-analysis.md) §2.
+- **The post-crash "Missing shutdown function for X : Y" / "File ... never closed" storm is a
+  red herring.** Those are `code=40010006` (`OutputDebugString`) lines from the application's
+  normal shutdown audit, which runs on any quit. Grep for the single `code=c0000005` above
+  them. A storm with no `c0000005` means a controlled exit, not a crash.
+- **Do not NOP a guest's `SetUnhandledExceptionFilter` call to force the crash unhandled.** In
+  an MSVCRT-static binary those call sites are CRT internals (install, then restore), and
+  NOPping them breaks CRT exception setup and boot. Use a host-level SIGSEGV catcher.

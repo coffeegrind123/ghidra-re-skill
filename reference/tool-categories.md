@@ -1,212 +1,89 @@
-# Ghidra MCP Tool Reference (~222 Tools)
+# Tool Map: task -> tool
 
-## Tool Categories from /mcp/schema
+A short map for ghidra-mcp-next. The full list is the server's `docs/tools.md`; every tool's
+typed signature and documentation is the resource `ghidra://api/tools.pyi`. Use
+`search_tools(pattern=...)` and `get_schema(tools=[...])` before calling a tool you have not
+used in this session.
 
-v6.0.0 uses dynamic tool discovery via bridge: on a headless server ~214 tools are auto-registered from `/mcp/schema` plus 8 static bridge tools (~222 exposed). The release ships 272 tools in total; the remainder are GUI-only. The categorized list below is a navigation guide — the live `/mcp/schema` is authoritative.
+**Listed** tools (always callable as `mcp__ghidra__<name>`) are marked *L*. All others are
+hidden: call them through `call(tool, arguments, database)`, as a `batch` op
+(`{"tool": ..., "params": {...}}`), or as `tools.<name>(...)` inside `execute`.
 
-## Analysis (17 tools)
-| Tool | Purpose |
-|------|---------|
-| `analyze_control_flow` | Cyclomatic complexity, loops, branches |
-| `analyze_data_region` | Analyze memory region structure |
-| `analyze_for_documentation` | Analyze function for documentation readiness |
-| `analyze_function_complete` | Comprehensive function analysis |
-| `analyze_function_completeness` | Documentation completeness score |
-| `batch_analyze_completeness` | Batch completeness analysis |
-| `detect_array_bounds` | Detect array boundaries |
-| `find_code_gaps` | Find gaps between known functions |
-| `find_dead_code` | Unreachable code detection |
-| `find_next_undefined_function` | Find undefined functions |
-| `find_similar_functions` | Find similar functions by structure |
-| `get_field_access_context` | Field access patterns |
-| `inspect_memory_content` | View raw memory content |
-| `list_analyzers` | List available analyzers |
-| `run_analysis` | Trigger auto-analysis |
-| `search_byte_patterns` | Search for byte patterns |
-| `search_functions_enhanced` | Advanced function search with filters |
+## Session and meta
 
-## Comment (6 tools)
-| Tool | Purpose |
-|------|---------|
-| `batch_set_comments` | Bulk comment setting (plate + optional PRE + EOL) |
-| `clear_function_comments` | Clear all comments for function |
-| `get_plate_comment` | Get function plate comment |
-| `set_decompiler_comment` | Set decompiler comment |
-| `set_disassembly_comment` | Set disassembly comment |
-| `set_plate_comment` | Set function plate comment |
+| Task | Tools |
+|---|---|
+| Open, wait, close | `open_database` *L*, `wait_for_analysis` *L*, `close_database` *L*, `list_databases` *L* |
+| Save to disk | `save_database` *L* |
+| Programs in a `.gpr` project | `list_project_files` *L* |
+| Wrong processor | `list_targets` *L* (then `open_database(language=, compiler_spec=)`) |
+| Find / describe tools | `search_tools` *L*, `get_schema` *L* |
+| Call one hidden tool | `call` *L* |
+| Atomic multi-edit | `batch` *L* |
+| Python against the Ghidra API | `execute` *L* |
+| Undo / redo a step | `undo` *L*, `redo` |
+| Existing GhidraScripts | `list_ghidra_scripts`, `run_ghidra_script` |
+| Re-run analysis | `run_auto_analysis`, `reanalyze_range` |
 
-## Datatype (29 tools)
-| Tool | Purpose |
-|------|---------|
-| `add_struct_field` | Add field to structure (auto-prefixes Hungarian) |
-| `analyze_struct_field_usage` | Structure field access patterns |
-| `apply_data_classification` | Apply data classification |
-| `apply_data_type` | Apply type to address |
-| `clone_data_type` | Clone data type with new name |
-| `create_array_type` | Create array data type |
-| `create_data_type_category` | Create category folder |
-| `create_enum` | Create enumeration |
-| `create_function_signature` | Create function signature type |
-| `create_pointer_type` | Create pointer data type |
-| `create_struct` | Create custom structure (auto-prefixes fields) |
-| `create_typedef` | Create typedef alias |
-| `create_union` | Create union data type |
-| `delete_data_type` | Delete a data type |
-| `get_enum_values` | Get enumeration values |
-| `get_struct_layout` | Detailed field layout of structure |
-| `get_type_size` | Byte size of a data type |
-| `get_valid_data_types` | Valid Ghidra builtin types |
-| `import_data_types` | Import types from GDT/header |
-| `list_data_type_categories` | List all categories |
-| `list_data_types` | Available data types |
-| `modify_struct_field` | Modify existing field (auto-prefixes Hungarian) |
-| `move_data_type_to_category` | Move type to different category |
-| `remove_struct_field` | Remove field from structure |
-| `search_data_types` | Search for data types |
-| `suggest_field_names` | AI-assisted field name suggestions |
-| `validate_data_type` | Validate data type syntax |
-| `validate_data_type_exists` | Check if data type exists |
-| `validate_function_prototype` | Validate prototype string |
+## Reading code
 
-## Documentation (11 tools)
-| Tool | Purpose |
-|------|---------|
-| `apply_function_documentation` | Import documentation to target function |
-| `batch_string_anchor_report` | String anchor analysis |
-| `bulk_fuzzy_match` | Bulk fuzzy match across all functions |
-| `compare_programs_documentation` | Compare documentation between programs |
-| `diff_functions` | Diff two functions side by side |
-| `find_similar_functions_fuzzy` | Fuzzy similarity matching |
-| `find_undocumented_by_string` | Find functions by string reference |
-| `get_bulk_function_hashes` | Paginated bulk hashing with filter |
-| `get_function_documentation` | Export complete function documentation |
-| `get_function_hash` | SHA-256 hash of normalized opcodes |
-| `get_function_signature` | Get function prototype string |
+| Task | Tools |
+|---|---|
+| Program summary | `get_database_info` *L* |
+| Functions | `list_functions` *L*, `get_function` *L*, `get_function_prototype`, `list_function_ranges`, `get_stack_frame` |
+| Decompile | `decompile_function` *L*, `decompile_functions` (expensive, filter it), `get_decompiler_tokens` |
+| Disassemble | `disassemble_function` *L*, `decode_instruction`, `decode_instructions`, `disassemble_functions` |
+| Variables | `list_decompiler_variables`, `get_function_vars` |
+| What is at an address | `get_address_info`, `get_code_unit`, `get_type_info`, `read_bytes` |
+| Control flow | `get_basic_blocks`, `get_cfg_edges`, `get_switch_info`, `list_switches` |
+| Operands, registers | `get_operand_value`, `find_register_value`, `get_register_name`, `get_processor_info` |
+| Documentation gaps | `score_documentation` |
+| Analysis problems | `get_analysis_problems` |
 
-## Function (21 tools)
-| Tool | Purpose |
-|------|---------|
-| `batch_decompile` | Batch decompile multiple functions |
-| `batch_rename_function_components` | Bulk renaming |
-| `clear_instruction_flow_override` | Clear flow override |
-| `create_function` | Create function at address |
-| `decompile_function` | Decompile to C pseudocode |
-| `delete_function` | Delete function at address |
-| `disassemble_bytes` | Raw byte disassembly |
-| `disassemble_function` | Disassembly listing |
-| `force_decompile` | Force fresh decompilation (bypass cache) |
-| `get_function_by_address` | Function at address |
-| `get_function_variables` | Get all function variables with storage types |
-| `rename_function` | Rename function by name |
-| `rename_function_by_address` | Rename function by address |
-| `rename_variable` | Rename single variable |
-| `rename_variables` | Rename function variables (dict) |
-| `set_function_no_return` | Mark function as non-returning |
-| `set_function_prototype` | Set function signature (WIPES plate comments) |
-| `set_local_variable_type` | Set variable type (rejects no-op if type unchanged) |
-| `set_parameter_type` | Set parameter type |
-| `set_variable_storage` | Control variable storage location |
-| `set_variables` | Atomic type+rename in one call (preferred) |
+## Navigation and search
 
-## Listing (20 tools)
-| Tool | Purpose |
-|------|---------|
-| `convert_number` | Number base conversion |
-| `get_entry_points` | Binary entry points |
-| `get_external_location` | Specific external location detail |
-| `get_function_count` | Total function count |
-| `list_calling_conventions` | Available calling conventions |
-| `list_classes` | List namespace/class names |
-| `list_data_items` | Defined data labels and values |
-| `list_data_items_by_xrefs` | Data items sorted by xref count |
-| `list_exports` | Exported symbols and functions |
-| `list_external_locations` | External location references |
-| `list_functions` | List all functions (paginated) |
-| `list_functions_enhanced` | List with isThunk/isExternal flags |
-| `list_globals` | Global variables |
-| `list_imports` | Imported symbols and libraries |
-| `list_methods` | List class methods |
-| `list_namespaces` | Available namespaces |
-| `list_segments` | Memory segments and layout |
-| `list_strings` | Extracted strings with analysis |
-| `search_functions` | Search functions by name/pattern |
-| `search_strings` | Search strings by regex/substring |
+| Task | Tools |
+|---|---|
+| References | `get_xrefs_to` *L*, `get_xrefs_from` *L*, `get_call_graph`, `find_decompiled_calls` |
+| Strings | `list_strings` *L*, `find_code_by_string` *L*, `create_string` |
+| Bytes / instruction text | `search_bytes`, `search_text` |
+| Imports, exports, entry | `list_imports`, `list_exports`, `list_entry_points` |
+| Names | `list_names`, `list_demangled_names`, `demangle_name`, `demangle_at_address` |
+| Memory layout | `list_memory_blocks`, `list_program_tree` |
+| Bookmarks | `set_bookmark`, `list_bookmarks`, `delete_bookmark` |
+| Library code | `apply_function_id`, `list_data_type_archives` |
 
-## Malware (5 tools)
-| Tool | Purpose |
-|------|---------|
-| `analyze_api_call_chains` | API call threat patterns |
-| `detect_crypto_constants` | Detect cryptographic constants |
-| `detect_malware_behaviors` | Malware behavior categories |
-| `extract_iocs_with_context` | Extract IOCs from strings |
-| `find_anti_analysis_techniques` | Anti-analysis techniques |
+## Editing
 
-## Program (21 tools)
-| Tool | Purpose |
-|------|---------|
-| `analysis_status` | Current analysis status |
-| `create_memory_block` | Create a new memory block |
-| `delete_bookmark` | Delete a bookmark |
-| `get_address_spaces` | List address spaces |
-| `get_current_program_info` | Current program details |
-| `get_metadata` | Program metadata and info |
-| `import_file` | Import file into program |
-| `list_bookmarks` | List all bookmarks |
-| `list_open_programs` | List all open programs |
-| `list_project_files` | List project files |
-| `list_scripts` | List available scripts |
-| `open_program` | Open program from project |
-| `read_memory` | Read raw bytes from memory |
-| `reanalyze` | Re-run analysis on program |
-| `run_ghidra_script` | Execute script by name |
-| `run_script` | Run a script |
-| `run_script_inline` | Execute inline script code |
-| `save_program` | Save current program |
-| `set_bookmark` | Create or update bookmark |
-| `set_image_base` | Set program image base |
-| `switch_program` | Switch active program |
+| Task | Tools |
+|---|---|
+| Rename | `rename_function`, `rename_symbol` (labels, globals, `DAT_*`), `rename_decompiler_variable` |
+| Prototype, convention, flags | `set_function_prototype`, `set_function_calling_convention`, `set_function_flags` |
+| Retype a variable | `retype_decompiler_variable` |
+| Comments | `set_comment` (`comment_type`: eol, pre, post, plate, repeatable), `set_decompiler_comment`, `set_function_comment`, `get_comment`, `get_function_comment`, `get_decompiler_comments` |
+| Functions | `create_function`, `delete_function`, `add_function_range`, `remove_function_range` |
+| Code and data | `disassemble_at`, `clear_code_units`, `create_data`, `create_array`, `set_type`, `apply_type_at_address`, `set_operand_format` |
+| Patching | `assemble_instruction` (dry run), `patch_instruction`, `patch_bytes` |
+| Xrefs | `add_code_xref`, `add_data_xref`, `delete_code_xref`, `delete_data_xref` |
+| Memory blocks | `create_memory_block`, `rename_memory_block`, `set_memory_block_permissions`, `delete_memory_block`, `set_image_base` |
+| Colors | `set_color`, `get_color` |
 
-## Symbol (11 tools)
-| Tool | Purpose |
-|------|---------|
-| `batch_create_labels` | Bulk label creation |
-| `batch_delete_labels` | Bulk label deletion |
-| `can_rename_at_address` | Check if address can be renamed |
-| `create_label` | Create label at address |
-| `delete_label` | Delete label at address |
-| `get_function_labels` | Get labels in function |
-| `rename_data` | Rename data item |
-| `rename_external_location` | Rename external reference |
-| `rename_global_variable` | Rename global variable |
-| `rename_label` | Rename existing label |
-| `rename_or_label` | Rename or create label |
+## Types
 
-## Xref (11 tools)
-| Tool | Purpose |
-|------|---------|
-| `analyze_call_graph` | Build function call graph |
-| `get_assembly_context` | Assembly context |
-| `get_bulk_xrefs` | Bulk cross-reference lookup |
-| `get_full_call_graph` | Complete call graph for program |
-| `get_function_call_graph` | Function relationship graph |
-| `get_function_callees` | Get function callees |
-| `get_function_callers` | Get function callers |
-| `get_function_jump_targets` | Jump target addresses from disassembly |
-| `get_function_xrefs` | Function cross-references |
-| `get_xrefs_from` | Cross-references from address |
-| `get_xrefs_to` | Cross-references to address |
+| Task | Tools |
+|---|---|
+| Whole type from C | `parse_type_declaration`, `parse_c_source` |
+| Structs | `create_structure`, `add_struct_member`, `rename_struct_member`, `retype_struct_member`, `delete_struct_member`, `get_structure`, `list_structures`, `delete_structure` |
+| Enums | `create_enum`, `add_enum_member`, `rename_enum_member`, `delete_enum_member`, `get_enum_members`, `list_enums`, `rename_enum`, `delete_enum` |
+| Any type | `get_data_type`, `list_data_types`, `delete_data_type` |
 
-## Static Bridge Tools (6 tools)
+## Ghidra Server
 
-These are always available regardless of tool group loading:
+| Task | Tools |
+|---|---|
+| State | `get_version_state`, `get_version_history`, `list_checkouts` |
+| Edit and publish | `checkout_file`, `checkin_file`, `undo_checkout` (destructive) |
 
-| Tool | Purpose |
-|------|---------|
-| `list_instances` | Verify MCP bridge connectivity and see the attached instance (`check_connection` is an HTTP endpoint, not a tool, as of v6.0.0) |
-| `list_instances` | List available Ghidra instances |
-| `connect_instance` | Connect to a specific Ghidra instance |
-| `load_tool_group` | Load a tool category on demand |
-| `check_tools` | Check which tool groups are loaded |
-| `store_function_knowledge` | Store function data to knowledge DB |
+## Utility
 
-Additional knowledge DB tools (`query_knowledge_context`, `export_system_knowledge`, etc.) are available when the knowledge database is active.
+`convert_number` converts between hex, decimal, octal and binary.

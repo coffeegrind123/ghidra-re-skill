@@ -1,23 +1,26 @@
 # ghidra-re
 
-An [Agent Skill](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills/overview) for reverse engineering binaries with [Ghidra MCP](https://github.com/bethington/ghidra-mcp) v6.0.0 (~222 tools via the Python bridge wheel; 272 shipped, the rest GUI-only).
+An [Agent Skill](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills/overview) for reverse engineering native binaries with [ghidra-mcp-next](https://github.com/coffeegrind123/ghidra-mcp-next), a headless Ghidra MCP server built around transactions: 22 listed tools, about 120 more through `search_tools`, atomic `batch` edits, and Python `execute` against the Ghidra API.
 
 ## What it does
 
-Gives Claude structured workflows for binary analysis in Ghidra's headless mode:
+Gives Claude structured workflows for binary analysis in headless Ghidra:
 
-- **Function documentation** — V5 protocol: decompile → rename → prototype → types → variables → globals → comments → verify. Enforces correct ordering (prototype changes wipe plate comments) and Hungarian notation.
-- **Batch documentation** — Parallel subagent dispatch (max 3) with model selection (Sonnet default, Opus for complex functions).
-- **Data type investigation** — Cross-function analysis to discover struct definitions from offset access patterns.
-- **Orphaned code discovery** — 3-pass scanner finds valid functions missed by Ghidra auto-analysis.
-- **Call graph analysis** — Callers, callees, full graph traversal, bulk xrefs.
-- **Security analysis** — Malware behaviors, anti-analysis techniques, IOC extraction.
+- **Change loop**: read, plan, one labelled atomic `batch` per coherent change, re-read, save. Retry-safe writes with `operation_id`, conflict detection with `if_revision`.
+- **Function documentation**: name, prototype, globals, locals, plate and inline comments, with Hungarian notation and Ghidra builtin types.
+- **Batch documentation**: targets from `score_documentation` (worst first), parallel subagents per database.
+- **Data type investigation**: struct definitions from offset access patterns across callers.
+- **Orphaned code discovery**: a three-pass gap scanner run through `execute`.
+- **Call graph analysis**: callers, callees, transitive walks in Python.
+- **Security analysis**: suspicious imports, strings, byte signatures, anti-analysis patterns.
+- **Ghidra Server**: checkout, checkin, history.
+- **Dynamic analysis companion**: confirming static findings at runtime (Wine, `/proc/<pid>/mem`, stub DLLs, tcpdump, PE rebasing).
 
 ## Requirements
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or any agent supporting the [Agent Skills spec](https://agentskills.io/specification)
-- [Ghidra MCP server](https://github.com/bethington/ghidra-mcp) running in headless mode (Python bridge + Java headless server on port 8089)
-- Ghidra 12.1 with Java 21 LTS
+- [ghidra-mcp-next](https://github.com/coffeegrind123/ghidra-mcp-next) configured as an MCP server named `ghidra` (tools appear as `mcp__ghidra__*`)
+- Ghidra 12.0 or newer, JDK 21, Python 3.12+
 
 ## Installation
 
@@ -35,7 +38,7 @@ Or for project-scoped use:
 git clone https://github.com/coffeegrind123/ghidra-re-skill.git .claude/skills/ghidra-re
 ```
 
-The skill is automatically discovered on next Claude Code session start.
+The skill is discovered on the next Claude Code session start.
 
 ### Claude.ai / Claude API
 
@@ -45,56 +48,34 @@ Package as a `.skill` zip and upload through Settings > Features (claude.ai) or 
 
 ```
 ghidra-re/
-├── SKILL.md                              # Core skill (217 lines)
-├── LEARNINGS.md                          # Append-only refinement log
+├── SKILL.md                              # Core skill
+├── LEARNINGS.md                          # Staging buffer for new findings
 ├── README.md
 └── reference/
-    ├── tool-categories.md                # MCP tools by category (~222 headless)
-    ├── function-documentation.md         # V5 protocol (single + batch)
-    ├── data-type-investigation.md        # Struct discovery via usage analysis
-    ├── orphaned-code-discovery.md        # 3-pass gap scanner, types A-G
+    ├── tool-categories.md                # Task -> tool name map
+    ├── function-documentation.md         # Documentation protocol (single + batch)
+    ├── data-type-investigation.md        # Struct discovery from usage
+    ├── orphaned-code-discovery.md        # Gap scanner, types A-G
     ├── hungarian-notation.md             # Type normalization + prefix table
-    ├── headless-operations.md            # Binary loading, HTTP endpoints
+    ├── headless-operations.md            # Opening, analysis, addressing, byte search
     ├── gotchas.md                        # Non-obvious failure modes + fixes
-    └── dynamic-analysis.md               # Runtime RE companion: Wine + /proc/mem + stubs + tcpdump
+    └── dynamic-analysis.md               # Runtime RE companion
 ```
 
-Progressive disclosure: SKILL.md metadata (~100 tokens) is always loaded. The SKILL.md body loads when triggered. Reference files load only when needed for specific workflows.
+SKILL.md metadata (~100 tokens) is always loaded; the body loads when triggered; reference files load only when a workflow needs them.
 
 ## Trigger conditions
 
-The skill activates when you mention: reverse engineer, decompile, disassemble, binary analysis, Ghidra, DLL/EXE investigation, function documentation, struct creation, orphaned code, call graphs, or malware analysis.
+Reverse engineer, decompile, disassemble, binary analysis, Ghidra, DLL/EXE/ELF investigation, function documentation, struct creation, orphaned code, call graphs, malware analysis.
 
-## Key workflows
-
-### Load and analyze a binary
+## Example requests
 
 ```
-> Load steam_api.dll into Ghidra and give me an overview
-```
-
-### Document a specific function
-
-```
-> Document the function at 0x10001A40 in the current binary
-```
-
-### Batch document undocumented functions
-
-```
-> Find all FUN_* functions and document them in batches
-```
-
-### Investigate a data type
-
-```
-> The first parameter of ProcessUnit is used as a struct pointer — investigate what type it is
-```
-
-### Find orphaned code
-
-```
-> Scan for hidden functions that Ghidra's auto-analysis missed
+> Open /path/to/libexample.so in Ghidra and give me an overview
+> Document the function at 0x10001A40
+> Find the 20 least documented functions and document them, callees first
+> The first parameter of ProcessRequest is used as a struct pointer; work out its type
+> Scan for functions Ghidra's auto-analysis missed
 ```
 
 ## License

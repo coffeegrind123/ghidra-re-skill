@@ -16,18 +16,16 @@ Always use lowercase Ghidra builtins, not Windows SDK types:
 | ULONGLONG | ulonglong | 8 bytes |
 | LONGLONG | longlong | 8 bytes |
 
-Use lowercase when calling `set_local_variable_type`, `apply_data_type`, `create_struct`.
+Use lowercase builtins in `set_function_prototype`, `retype_decompiler_variable`, `set_type`,
+`parse_type_declaration` and `add_struct_member`. The prototype parser does not know
+`uint8_t` or `size_t` unless a type archive defines them: `int f(uint8_t *buf, size_t len)`
+fails with a C ParseException, `int f(byte *buf, uint len)` works.
 
-## Struct Field Auto-Prefixing (v5.0.0)
+## Who applies prefixes
 
-In GhidraMCP v5.0.0, struct field names are **auto-prefixed by the server**. The following tools apply Hungarian prefixes automatically based on field type:
-- `create_struct` — all fields in the initial definition
-- `add_struct_field` — the new field being added
-- `modify_struct_field` — the modified field
-
-Do NOT manually add Hungarian prefixes to struct field names — the server handles it. Passing `dwFlags` when the server expects `Flags` will result in double-prefixed names like `dwdwFlags`.
-
-Variable renames (`rename_variables`, `set_variables`) still require manual Hungarian prefixes. The server validates that the prefix matches the actual type.
+The server never adds or checks Hungarian prefixes. You apply them yourself to local
+variables, parameters, globals and struct fields alike. Set the type first, then choose the
+prefix from the real type.
 
 ## Type-to-Prefix Mapping
 
@@ -48,14 +46,14 @@ Variable renames (`rename_variables`, `set_variables`) still require manual Hung
 | double | 8B | d | dPowerResult | g_dPiConstant |
 | float10 | 10B | ld | ldExtended | g_ldMathConstant |
 | void * | 4B | p | pBuffer, pData | g_pSharedMemory |
-| \<type\> * | 4B | p\<Type\> | pUnitAny | g_pCurrentPlayer |
+| \<type\> * | 4B | p\<Type\> | pConnection | g_pActiveSession |
 | HANDLE | 4B | h | hFile, hThread | g_hRegistryKey |
 | byte[N] | NB | ab | abXmmBuffer | g_abEncryptionKey |
 | ushort[N] | N*2B | aw | awTableEntries | g_awPortNumbers |
-| uint[N] | N*4B | ad | adOffsetTable | g_adPlayerSlots |
+| uint[N] | N*4B | ad | adOffsetTable | g_adSlotTable |
 | char * | 4B | sz/lpsz | szPath, lpszCmd | g_szConfigPath |
 | wchar_t * | 4B | wsz | wszUnicodePath | g_wszDisplayName |
-| \<Struct\> | varies | camelCase | unitAny, playerData | g_ServiceStatus |
+| \<Struct\> | varies | camelCase | connection, sessionData | g_ServiceStatus |
 | Func ptr | 4B | PascalCase | — | ProcessInputEvent |
 
 ## Scope Prefix
@@ -82,17 +80,18 @@ Function pointers: PascalCase, no `g_` prefix (ProcessInputEvent, ValidatePacket
 Always specify complete declaration:
 - `void *` not `pointer`
 - `char *` not `pointer`
-- `UnitAny *` not `pointer`
+- `Connection *` not `pointer`
 - `int *` if dereferenced or offset arithmetic
 
 ## Workflow
 
-1. `get_function_variables` — discover storage types
+1. `list_decompiler_variables`: current names and stored types
 2. Normalize: UINT->uint, DWORD->uint, BYTE->byte
-3. `set_variables` for atomic type+rename (preferred) or `set_local_variable_type` for type-only changes
-4. `get_function_variables` — verify, discover new SSA vars
-5. If separate rename needed: `rename_variables` with Hungarian prefixes
-6. Verify: prefix matches actual type (dw<->uint, w<->ushort, b<->byte)
+3. One `batch`: `retype_decompiler_variable` then `rename_decompiler_variable` for each
+   variable (type before name), parameters through `set_function_prototype`
+4. `list_decompiler_variables` again: verify against the fresh list (the decompiler re-ran)
+5. A second batch for anything left
+6. Verify: prefix matches the type (dw<->uint, w<->ushort, b<->byte)
 
 ## Common Mismatches (Must Fix)
 

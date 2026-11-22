@@ -1,336 +1,364 @@
 ---
 name: ghidra-re
-description: Reverse engineer, decompile, and analyze NATIVE binaries using 222 Ghidra MCP tools. Covers function documentation, data type investigation, orphaned code discovery, call graph analysis, struct creation, variable renaming, binary reconnaissance, and malware analysis. Use when the user mentions Ghidra, decompilation, disassembly, binary analysis, DLL/EXE investigation, function renaming, malware analysis, or references function addresses like 0x401000. Do NOT use for source-level debugging, dynamic analysis, non-Ghidra RE tools, or MANAGED .NET assemblies (use ILSpy/ilspycmd for those — see rule 0).
+description: Reverse engineer, decompile, and analyze NATIVE binaries with the ghidra-mcp-next headless Ghidra MCP server (22 listed tools, ~120 more via search_tools, atomic batch edits, and Python execute against the Ghidra API). Covers function documentation, data type investigation, orphaned code discovery, call graph analysis, struct creation, variable renaming, binary reconnaissance, malware analysis, and Ghidra Server checkout/checkin. Use when the user mentions Ghidra, decompilation, disassembly, binary analysis, DLL/EXE/ELF investigation, function renaming, malware analysis, or references function addresses like 0x401000. Do NOT use for source-level debugging, dynamic analysis, non-Ghidra RE tools, or MANAGED .NET assemblies (use ILSpy/ilspycmd for those, see rule 0).
 allowed-tools: mcp__ghidra__* Bash(curl:*)
 when_to_use: "Use when the user wants to reverse engineer or analyze a binary with Ghidra. Examples: 'analyze this binary', 'decompile this function', 'what does this DLL do', 'document all functions', 'find hidden functions', 'create a struct', 'trace the call graph', 'check for malware', 'rename this function at 0x401000'."
 argument-hint: "[function address, binary path, or task description]"
 metadata:
   author: coffeegrind123
-  version: "1.2"
+  version: "2.0"
 ---
 
 # Ghidra MCP Reverse Engineering
 
+Server: ghidra-mcp-next (headless, pyghidra). Tools appear as `mcp__ghidra__<name>`.
+
 ## General Rules
 
-0. **Triage first — is it even native?** Run `file` on the target before loading it into Ghidra. Ghidra is for **native** code (PE/ELF/Mach-O machine code). A **managed .NET assembly** (`file` reports "Mono/.Net assembly", or it references `Microsoft.CodeAnalysis`/`System.*`) decompiles far better with **ILSpy / `ilspycmd`**, which reconstructs near-original C#; Ghidra's CIL output is poor and slow. Heads-up: a .NET single-file app ships a tiny **native apphost `.exe`** (a generic launcher — not worth REing) next to the real managed `.dll` — RE the `.dll` with ILSpy. Only stay in Ghidra when the binary is genuinely native.
+0. **Triage first: is it native?** Run `file` on the target before opening it. Ghidra is for
+   native code (PE/ELF/Mach-O machine code). A managed .NET assembly (`file` says
+   "Mono/.Net assembly") decompiles far better with ILSpy / `ilspycmd`, which rebuilds
+   near-original C#. Ghidra's CIL output is poor and slow. A .NET single-file app ships a small
+   native apphost `.exe` (a generic launcher, not worth reversing) next to the managed `.dll`:
+   reverse the `.dll` with ILSpy.
 
-   **ILSpy install (no dotnet/ilspycmd preinstalled here):**
    ```sh
    curl -fsSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0 --install-dir ~/.dotnet --no-path
    ~/.dotnet/dotnet tool install -g ilspycmd --version 9.1.0.7988
-   # EVERY run (tool targets net6, runtime is net8):
+   # every run (the tool targets net6, the runtime is net8):
    export DOTNET_ROOT=$HOME/.dotnet PATH=$HOME/.dotnet:$HOME/.dotnet/tools:$PATH DOTNET_ROLL_FORWARD=LatestMajor
    ilspycmd foo.dll -o .        # -> foo.decompiled.cs
    ```
-   ⚠ **Pin `9.1.0.7988`.** Unpinned/`10.1.x` fail with "DotnetToolSettings.xml not found";
-   `8.2.x` crashes on net10 metadata via `System.Version.ToString(fieldCount)`.
-   ⚠ Use single-file output — project mode `-p` throws on newer TargetFramework metadata.
-   To extract an **embedded manifest resource** without running the assembly, a ~30-line C#
-   tool over `PEReader` + `MetadataReader.ManifestResources` (read
-   `CorHeader.ResourcesDirectory`, then the per-resource length-prefixed blob) dumps it.
+   Pin `9.1.0.7988`: unpinned and `10.1.x` fail with "DotnetToolSettings.xml not found";
+   `8.2.x` crashes on net10 metadata. Use single-file output; project mode `-p` throws on newer
+   TargetFramework metadata. To pull an embedded manifest resource without running the
+   assembly, a short C# tool over `PEReader` + `MetadataReader.ManifestResources` dumps it.
 
-0b. **Triage second — do you even need Ghidra?** For a **known function in a non-stripped
-binary**, host binutils answer in seconds with no project, no import, no analysis wait and
-no image-base arithmetic to get wrong:
+0b. **Do you need Ghidra at all?** For a known function in a non-stripped binary, binutils
+   answer in seconds with no import and no analysis wait:
+   ```sh
+   file  <bin>                                   # arch, stripped?, PIE/.so?
+   nm -D --defined-only <bin> | grep -i <name>   # exported symbol -> address
+   nm -D -u <bin> | grep -iE 'brk|mmap|malloc'   # imports = behaviour hints
+   readelf -V <bin> | grep -oE 'GLIBC_2\.[0-9]+' # minimum glibc it needs
+   objdump -d --start-address=0xA --stop-address=0xB -M intel <bin>
+   ```
+   Use Ghidra for decompilation, whole-program xrefs, type recovery, call graphs, saved
+   annotations, or a stripped binary. `readelf -V | grep GLIBC_` answers "why won't this run
+   here". Binutils are missing on many slim images; there every command prints nothing and
+   `grep -c` prints `0`. Confirm the tool exists before trusting a negative.
 
-```sh
-file  <bin>                                   # arch, stripped?, PIE/.so?
-nm -D --defined-only <bin> | grep -i <name>   # exported symbol -> address
-nm -D -u <bin> | grep -iE 'brk|mmap|malloc'   # imports = behaviour hints
-readelf -V <bin> | grep -oE 'GLIBC_2\.[0-9]+' # minimum glibc it requires
-objdump -d --start-address=0xA --stop-address=0xB -M intel <bin>
+1. **Lifecycle.** `open_database(file_path=...)` returns at once with a `database` id. Call
+   `wait_for_analysis(database=...)` before anything else; other tools are refused while it
+   opens. Every other tool takes `database`. Several databases can be open at once; each is
+   addressed only by its id. There is no "current program".
+
+2. **Change loop.** Read (decompile, list variables, xrefs) -> plan every edit -> ONE `batch`
+   per coherent change, with a `label` -> re-read to check -> `save_database`. Do not send
+   edits one call at a time. A batch is atomic: if any op fails, nothing changes.
+
+3. **Save discipline.** Nothing reaches disk until `save_database(database, comment)`.
+   `close_database` saves by default. Save after each finished function or batch group.
+
+4. **Phantom variables.** `extraout_*` and `in_*` variables with `undefined` types are
+   decompiler artifacts from register splitting. Renaming or retyping them fails, and one
+   failing op rolls back the whole batch. Leave them out of batches and note them in the plate
+   comment's Special Cases.
+
+5. **Hungarian notation** for variables, globals, and struct fields. The server does not add
+   prefixes; you apply them everywhere. Set the type first; the prefix must match the real
+   Ghidra type, not the decompiler's display type. Table:
+   [reference/hungarian-notation.md](reference/hungarian-notation.md).
+
+6. **Name collisions.** Before renaming, check the name is free:
+   `list_functions(filter_pattern="^Name$")`, and `list_names(filter_pattern="^g_name$")` for
+   globals. Parallel agents can pick the same name.
+
+7. **Thunk dual-documentation.** If a function is a single JMP (`get_function` shows
+   `is_thunk`), document BOTH the thunk and the body it jumps to (`get_xrefs_from` on the JMP).
+   Otherwise the body stays `FUN_*` with no comments.
+
+8. **Context budget.** Listings are paginated (`items`, `total`, `offset`, `limit`,
+   `has_more`). Always pass `limit`. `decompile_functions` costs seconds per function; filter
+   it with `filter_pattern`. `execute` caps stdout at 64 KiB and the result at 256 KiB: return
+   summaries, not dumps.
+
+9. **Type normalization.** Use lowercase Ghidra builtins (`uint`, `ushort`, `byte`, `char`,
+   `int`, pointer forms) not Windows SDK types (`DWORD`, `USHORT`, `BYTE`). The prototype
+   parser knows the builtins but not `uint8_t` or `size_t` unless a type archive defines them:
+   `int f(uint8_t *buf, size_t len)` fails with a C ParseException; `int f(byte *buf, uint len)`
+   works.
+
+10. **Autonomy.** Run the workflows without asking for confirmation at each step. Ask only when
+    the binary's purpose or a function's behaviour is genuinely ambiguous.
+
+11. **Parallel writers and retries.** When subagents edit the same database, pass
+    `if_revision` (the `revision` from your last result) on writes that depend on what you
+    read. If another write landed, the call fails with `TargetChanged` and changes nothing:
+    re-read and retry. Pass `operation_id` on any write you might resend (timeouts, retries):
+    a repeat returns the stored result with `replayed: true` instead of applying twice.
+    Every `batch`, `execute`, `undo` and save result, and every batch/execute error, carries
+    the current `revision`.
+
+12. **Finding tools.** 22 tools are listed. The rest (~120) are found with
+    `search_tools(pattern="struct|enum")` and run through `call(tool, arguments, database)`,
+    as `batch` ops, or as `tools.<name>(...)` inside `execute`. `get_schema(tools=[...])` gives
+    parameters. The resource `ghidra://api/tools.pyi` is the full typed API. Never guess a tool
+    or parameter name: look it up. This skill names hidden tools directly (`score_documentation`,
+    `set_comment`, ...); call them through `call`, `batch` or `execute`, not as `mcp__ghidra__*`.
+
+## batch and execute
+
+**`batch(database, ops=[{tool, params}], label, if_revision, operation_id, dry_run)`**
+- Up to 100 ops in ONE transaction. Any failure rolls back everything; the error names
+  `op_index`, `tool`, `error_type` and the current `revision`.
+- Success is one undo step named `MCP: <label>`. `undo` reverts it and reports the name.
+- `"$N.path"` is replaced by that value from op N's result, keeping its type (`"$0.address"`,
+  `"$2.items.0.name"`). `"${N.path}"` interpolates inside a longer string. `$$` escapes `$`.
+- `dry_run=true` runs every op, returns the results, then rolls back. Use it to validate a
+  risky plan.
+- Refused inside a batch (`InvalidOp`): lifecycle tools, `undo`/`redo`, `run_auto_analysis`,
+  `reanalyze_range`, `set_image_base`, `run_ghidra_script`. Call those on their own.
+
+Example: document one function. After `rename_function`, the name `FUN_00401000` is gone, so
+later ops use the entry address it returned (`$1.address`).
+
+```json
+batch(database="fw_bin", label="doc ParsePacketHeader",
+      if_revision=1284, operation_id="doc-401000-a", ops=[
+  {"tool": "parse_type_declaration", "params": {"declaration":
+     "struct PacketHeader { ushort wType; ushort wLength; uint dwSequence; byte *pPayload; };"}},
+  {"tool": "rename_function", "params": {"address": "FUN_00401000", "new_name": "ParsePacketHeader"}},
+  {"tool": "set_function_prototype", "params": {"address": "$1.address", "type_string":
+     "int ParsePacketHeader(${0.type_name} *pHeader, byte *pBuffer, uint dwLength)"}},
+  {"tool": "set_type", "params": {"address": "0x40a010", "type_string": "uint"}},
+  {"tool": "rename_symbol", "params": {"address": "0x40a010", "new_name": "g_dwPacketCount"}},
+  {"tool": "rename_decompiler_variable", "params": {"function_address": "$1.address",
+     "old_name": "local_10", "new_name": "dwOffset"}},
+  {"tool": "set_comment", "params": {"address": "$1.address", "comment_type": "plate",
+     "comment": "Validates a packet header and copies its payload.\n\nAlgorithm:\n1. ..."}}])
 ```
 
-Escalate to Ghidra for what binutils cannot do: decompilation to C, whole-program xrefs,
-type/struct recovery, call graphs, persistent annotation, or a **stripped** binary with no
-symbol to anchor on.
-⚠ `readelf -V | grep GLIBC_` is the one-command answer to "why won't this run here" — check
-it before blaming the environment. A binary **you** compiled may require a *newer* glibc
-than the base image you were about to pin to.
-⚠ Binutils are absent on many prod hosts and in `node:*-slim`, where every invocation
-returns empty and `grep -c` over it prints `0` — which reads as "feature missing". Confirm
-the tool exists before trusting a negative (see rule 14).
+**`execute(database, code, read_only, label, timeout_s, if_revision, operation_id)`**
+- CPython 3 through pyghidra (not Jython, not Java). The code is a function body: `return`
+  or a final bare expression gives the result. Java objects are converted with `str()`.
+- Globals: `program` / `currentProgram`, `flat` (FlatProgramAPI), `monitor`, `toAddr`,
+  `decompile(func_or_addr) -> str`, `tools.<name>(**params) -> dict` (every tool), `print`
+  (captured), and imports from the `ghidra` and `java` packages.
+- One transaction: an exception or timeout rolls everything back. `read_only=true` always
+  rolls back. A successful write is one undo step.
+- `timeout_s` (1-600, default 30) is checked between Python lines; one long Java call can
+  overrun it.
+- Use it for loops, computed edits, and reads no single tool covers. Disabled when the server
+  runs with `GHIDRA_MCP_DISABLE_EXECUTE=1`.
 
-1. **Pre-flight**: Always confirm the bridge is attached before any session work — `list_instances` (shows the connected instance, its project and open programs), then `check_tools` for the specific tools you are about to use. ⚠ **`check_connection` is NOT an MCP tool in v6.0.0** — it exists only as an HTTP health probe (`curl http://127.0.0.1:8089/check_connection`). Calling it as a tool fails with "unknown tool", which reads like a broken bridge when the bridge is fine.
+Example: every unnamed function reachable from one function, leaves first (no single tool
+walks the graph transitively and filters by name):
 
-2. **Save discipline**: `save_program` after every batch of mutations (every 5-10 changes). The headless server has no auto-save — a crash loses all unsaved work.
-
-3. **Ordering law**: `set_function_prototype` WIPES existing plate comments — this is a Ghidra behavior, not a bug. Complete ALL naming, prototype, and type changes BEFORE setting plate comments and inline comments. Violating this order means re-doing all comment work. Note: in v5.0.0 the server now validates plate comment quality, but the wipe-on-prototype behavior remains.
-
-4. **Phantom variables**: `extraout_*`, `in_*` variables with `undefined` types are decompiler artifacts from register splitting. They cannot be renamed or retyped. Note in plate comment Special Cases and skip.
-
-5. **Hungarian notation**: All variable and global renames use Hungarian prefixes. Types must be set BEFORE renaming — the prefix must match the actual Ghidra type, not the decompiler's display type. Struct field names are NOW SERVER-ENFORCED via auto-prefixing on `create_struct`, `add_struct_field`, and `modify_struct_field` — do not manually add Hungarian prefixes to struct fields. Variable renames still require manual prefixes but the server validates them. Read [reference/hungarian-notation.md](reference/hungarian-notation.md) when you need the type-to-prefix table.
-
-6. **Name collision checking**: Always `search_functions_enhanced` with the chosen name before `rename_function`. Parallel subagents can independently pick the same name, causing silent overwrites.
-
-7. **Thunk dual-documentation**: If a function is a single JMP (thunk/forwarding stub), document BOTH the thunk AND the implementation body it jumps to. Documenting only the thunk leaves the body named `FUN_*` with no comments.
-
-8. **Context budget**: `batch_decompile` and `list_functions` can return huge payloads that blow the context window. Always use offset/limit parameters.
-
-9. **Type normalization**: Use lowercase Ghidra builtins (uint, ushort, byte) not Windows SDK types (DWORD, USHORT, BYTE). Ghidra's type resolver prioritizes builtins — using SDK types causes inconsistent resolution.
-
-10. **Autonomy**: Execute RE workflows without asking for confirmation at each step. Ask only when the binary's purpose or a function's behavior is genuinely ambiguous.
-
-11. **Atomic variable operations**: `set_variables` is the preferred tool for atomic type+rename operations. It eliminates SSA churn from separate type-set and rename calls, reducing decompiler re-analysis cycles.
-
-12. **Multi-binary discipline — loading is NOT switching**: `load_program`/`import_file` do NOT make the new binary current. The server keeps a separate `current_program` **name**, and every tool omitting `program=` resolves against it — so after loading a second binary your queries keep answering **from the first one, silently and plausibly**. Also: two files with the same basename collide (the second load reports success but does not exist). Always: copy inputs to **distinct basenames** -> load -> **`switch_program(name)`** -> verify with **`list_open_programs`** that `is_current: true`. Pass `program=` explicitly on every call in a multi-binary session. **Never trust `get_current_program_info`** — see rule 13.
-
-13. **`get_current_program_info` lies about closed programs**: it returns CACHED data (name, `executable_path`, `function_count`) for a program that has already been closed. `list_open_programs` is the only source of truth; the tell is its `count`/`is_current`/`current_program` fields disagreeing with each other, or `current_program` naming a program absent from `programs[]`. **Red flag**: if queries against two "different" binaries return byte-identical addresses, you are reading one binary — verify before believing any of it.
-
-## Breaking Changes (current: v6.0.0)
-
-GhidraMCP v5+ uses a bridge with dynamic tool discovery instead of the v4 hardcoded handlers. Key changes:
-
-- **Tool count**: the v6.0.0 release ships **272 tools** across GUI and headless. A **headless** server registers **~214** of them plus **8 static bridge tools** — about **222 exposed**, measured against Ghidra 12.0.3. The live `/mcp/schema` is the authoritative list — categorized docs are a guide, not exhaustive.
-- **The bridge is a wheel, not a script**: v6.0.0 ships `ghidra_mcp_bridge-6.0.0-py3-none-any.whl` with a `bridge-mcp-ghidra` console script. A stray `bridge_mcp_ghidra.py` on disk will shadow it — if tool names look like an older release, check for that file first.
-- **`check_connection` is no longer an MCP tool** (see rule 1). Use `list_instances` / `check_tools`.
-- **`store_function_knowledge` is not registered** on a stock v6 headless server — it belonged to the psycopg2-gated knowledge DB. Do not build a workflow around it without confirming via `check_tools`.
-- **Absent from the v6 headless surface** (verified against a live `/mcp/schema`, Ghidra 12.0.3). Some are GUI-only, some are gone; either way `check_tools` returns `not_found` here:
-  `check_connection`, `batch_rename_variables`, `batch_set_variable_types`, `consolidate_duplicate_types`, `search_memory_strings`, `run_script`, `project_info`, `export_system_knowledge`, `store_function_knowledge`, and the GUI navigation tools (`launch_codebrowser`, `goto_address`, `get_current_selection`, `get_current_address`, `get_current_function`).
-  ⚠ When one of these fails, it is a **missing tool**, not a broken bridge or a failed analysis — the two look identical from the error alone. `search_tools` confirms what actually exists before you build a workflow on a remembered name.
-- **Parameter descriptions are mostly missing at call time — do not read that as "undocumented".** The tool descriptions arrive fine, but ~800 of the bridge's parameters reach you with no description, so a parameter's format, units, and accepted values often look unspecified. **The server usually does document them** — it publishes descriptions for 415 of 689 parameters in `/mcp/schema`, and the bridge drops them building `inputSchema` (upstream fix pending: bethington/ghidra-mcp#425). When a parameter's format is unclear, do NOT guess and do NOT infer it from the name: read the real text with `search_tools`, or go straight to the source —
-  ```sh
-  # every param of one tool, with the descriptions the tool call never showed you
-  curl -s http://127.0.0.1:8089/mcp/schema | python3 -c "
-  import sys,json
-  for t in json.load(sys.stdin)['tools']:
-      if t['path']=='/search_functions_enhanced':
-          for p in t['params']: print(f\"{p['name']:24}{p.get('description','(undocumented)')}\")"
-  ```
-  (`search_functions_enhanced` documents 10 of its 12 parameters server-side and shows none of them at the tool call — a representative case, not a cherry-picked one.)
-  Guessing an address format or an enum value here is the single most likely way to produce a call that fails cryptically or, worse, silently does the wrong thing.
-- **`batch_rename_variables` renamed to `rename_variables`**: The old name no longer exists. Use `rename_variables` for all variable rename operations.
-- **`set_variables` is new**: Atomic type+rename in one call. Preferred over separate `batch_set_variable_types` + `rename_variables` to avoid SSA churn.
-- **`batch_set_comments` arrays now optional**: `decompiler_comments` and `disassembly_comments` arrays are optional — you can pass only `plate_comment` if that's all you need.
-- **`analyze_function_completeness` removed from documentation workflow**: Scoring is now external in v5. Do not call it inside the function documentation protocol.
-- **Struct field Hungarian prefixes are server-enforced**: `create_struct`, `add_struct_field`, and `modify_struct_field` auto-prefix field names. Do not manually add prefixes.
-- **Static bridge tools (v6.0.0, all 8)**: `list_instances`, `connect_instance`, `list_tool_groups`, `load_tool_group`, `unload_tool_group`, `search_tools`, `check_tools`, `import_file`. These are always available even before an instance is attached.
-- **`check_tools` returns `not_loaded`**: If a tool group isn't loaded, use `connect_instance` or `load_tool_group` to activate it.
-- **`search_tools` searches the whole catalog**, including groups that are not loaded — use it to find the right tool without loading everything first.
-- **Security (v6.0.0)**: the HTTP servers reject cross-origin requests and non-loopback `Host` headers with **403** unless `GHIDRA_MCP_AUTH_TOKEN` is set. The MCP bridge is exempt (loopback `Host`, no `Origin`), so a normal setup needs no token — but a 403 from a browser or a remote client is this guard, not a broken server.
-
-### Coming in v7.0.0 (unreleased — do not write call sites against it yet)
-
-A hard break with no compatibility aliases: **272 → 251 tools**, and **every tool returns JSON**.
-`set_plate_comment` / `set_decompiler_comment` / `set_disassembly_comment` collapse into
-`set_comment(address, comment, type=...)`; each `batch_*` tool merges into its singular form with a
-bulk argument (`batch_decompile` → `decompile_function(functions="a,b,c")`);
-`set_local_variable_type` / `set_parameter_type` → `set_variable_type`; `rename_data` /
-`rename_label` / `rename_or_label` → `rename_symbol(..., kind=...)`. Tools that answered in prose
-return records, so detect errors by an `error` key rather than by pattern-matching English.
-
-## Lifecycle
-
+```python
+fm = program.getFunctionManager()
+root = fm.getFunctionContaining(toAddr("0x401000"))
+seen, todo, out = set(), [(root, 0)], []
+while todo:
+    f, depth = todo.pop()
+    key = str(f.getEntryPoint())
+    if key in seen or depth > 4:
+        continue
+    seen.add(key)
+    if f.getName().startswith("FUN_"):
+        out.append({"address": key, "depth": depth,
+                    "size": int(f.getBody().getNumAddresses()),
+                    "callers": f.getCallingFunctions(monitor).size()})
+    for callee in f.getCalledFunctions(monitor):
+        if callee.isThunk():
+            callee = callee.getThunkedFunction(True)
+        if callee is not None and not callee.isExternal():
+            todo.append((callee, depth + 1))
+return sorted(out, key=lambda r: (-r["depth"], r["size"]))
 ```
-list_instances -> [load binary or verify current program] -> get_current_program_info
-  -> [workflow: recon | function_doc | batch_doc | data_types | orphaned_code | call_graph | security]
-  -> save_program -> [repeat or close_project]
-```
+Run it with `read_only=true`. Java `byte` values arrive signed in Python: mask with `& 0xFF`.
+
+**`run_ghidra_script(script, args)`** runs an existing Java or Python GhidraScript by name
+(from `GHIDRA_MCP_SCRIPT_DIRS`, `~/ghidra_scripts`, Ghidra's bundled dirs; see
+`list_ghidra_scripts`) or by absolute path. One transaction, rolled back if it throws. It has
+no time limit: a script that loops forever blocks that database. For new logic use `execute`.
 
 ## Decision Tree
 
-```
-What does the user want?
-+-- "Analyze this binary" / "What does this do?"
-|   +-- Binary not loaded -> Phase 0 (Load Binary)
-|   +-- Binary loaded, no prior work -> Phase 1 (Initial Recon)
-|   +-- Specific function mentioned -> Phase 2 (Single Function Doc)
-|
-+-- "Document functions" / "Clean up this binary"
-|   +-- Single function -> Phase 2
-|   +-- Multiple / "all" / "batch" -> Phase 3 (Batch Documentation)
-|
-+-- "What is this struct?" / "Create a type" / "This param is a pointer to..."
-|   +-- Phase 4 (Data Type Investigation)
-|
-+-- "Find hidden functions" / "Orphaned code" / "Missed functions"
-|   +-- Phase 5 (Orphaned Code Discovery)
-|
-+-- "Who calls this?" / "Call graph" / "Trace execution"
-|   +-- Phase 6 (Call Graph Analysis)
-|
-+-- "Check for malware" / "IOCs" / "Anti-analysis"
-    +-- Phase 7 (Security Analysis)
-```
-
-## Phase 0: Load Binary
-
-Use `import_file` to load a binary. It runs Ghidra's headless analyzer automatically:
+Every path: `open_database` -> `wait_for_analysis` -> work -> `save_database`.
 
 ```
-import_file(file_path="/absolute/path/to/binary", auto_analyze=true)
+"Analyze this" / "What does it do?" -> not open: Phase 0; open: Phase 1; one function: Phase 2
+"Document functions" / "Clean up"   -> one: Phase 2; many or "all": Phase 3
+"What is this struct?"              -> Phase 4      "Find hidden functions" -> Phase 5
+"Who calls this?" / "Call graph"    -> Phase 6      "Malware" / "IOCs"      -> Phase 7
 ```
 
-After loading:
-1. `get_current_program_info` — verify architecture, compiler, format
+## Phase 0: Open
 
-Read [reference/headless-operations.md](reference/headless-operations.md) if loading binaries or troubleshooting headless server issues.
+| Source | `open_database` arguments |
+|---|---|
+| A binary | `file_path="/path/to/binary", run_auto_analysis=true` (imports into `<dir>/ghidra_projects/`, which must be writable) |
+| A program in an existing project | `file_path="/path/to/proj.gpr", program="/folder/prog"`; `list_project_files(project=...)` lists programs without opening anything |
+| A Ghidra Server program | `file_path="ghidra://host[:port]/repo/folder/prog"`; read-only until `checkout_file` (see Ghidra Server) |
 
-## Phase 1: Initial Recon
+Then `wait_for_analysis(database=...)`, then `get_database_info` (processor, bitness,
+`image_base`, `function_count`). If auto-detection picked the wrong processor (raw firmware),
+re-open with `language=` and `compiler_spec=` from `list_targets`. Analysis of a large binary
+takes minutes. Details: [reference/headless-operations.md](reference/headless-operations.md).
 
-1. `get_current_program_info` — architecture, compiler, format, image base
-2. `list_exports` — public API surface, ordinals
-3. `list_imports` — dependencies, runtime features, API usage
-4. `list_strings` with `filter` param — URLs, paths, error messages, format strings, API names
-5. `get_entry_points` — execution entry
-6. `list_segments` — memory layout (.text, .data, .rdata, etc.)
-7. `get_function_count` + `list_functions` (first 50, sorted by size) — overview
-8. `search_byte_patterns` for specific signatures if relevant
+## Phase 1: Recon
 
-Present summary: binary type, likely purpose, key exports, interesting strings, suggested next steps.
+1. `get_database_info`: format, processor, image base, counts.
+2. `list_exports`, `list_imports(module_filter=...)`: API surface and dependencies.
+3. `list_strings(filter_pattern=...)`: URLs, paths, errors, format strings, API names.
+   `find_code_by_string(pattern=...)` goes from a string to the code using it.
+4. `list_entry_points`, `list_memory_blocks`: entry and memory layout.
+5. `list_functions(limit=50)` and `score_documentation(limit=20)` for an overview.
+6. Optional: `apply_function_id` to name library code from FID databases.
 
-## Phase 2: Single Function Documentation (V6)
+Report: binary type, likely purpose, key exports, interesting strings, next steps.
 
-For the complete step-by-step protocol, read [reference/function-documentation.md](reference/function-documentation.md).
+## Phase 2: Single Function Documentation
 
-Summary of the V6 workflow:
-1. **Initialize**: `decompile_function` + `get_function_variables` — understand current state
-2. **Rename**: `rename_function_by_address` with PascalCase verb-first name (check collision first)
-3. **Prototype**: `set_function_prototype` — correct types, calling convention (BEFORE comments)
-4. **Variables**: `set_variables` for atomic type+rename (eliminates SSA churn vs separate calls)
-5. **Structures**: `create_struct` + `add_struct_field` if offset access patterns found
-6. **Globals**: `rename_global_variable` with g_ prefix for DAT_*/s_* references
-7. **Comments**: `batch_set_comments` — plate + optional PRE + EOL (AFTER all naming/type changes). Verify consistency between function name and plate comment.
+Full protocol: [reference/function-documentation.md](reference/function-documentation.md).
+
+1. **Read**: `decompile_function`, `list_decompiler_variables`, `get_function`,
+   `get_xrefs_from`. Classify (thunk, leaf, worker, init, handler, public API).
+2. **Plan**: name (PascalCase, verb first, collision-checked), prototype, globals, struct use,
+   local names, comments.
+3. **Batch A, identity**: types (`parse_type_declaration`), `rename_function`,
+   `set_function_prototype`, globals (`set_type` then `rename_symbol`).
+4. **Re-read** `list_decompiler_variables`: a prototype change re-runs the decompiler, so
+   take local names from this fresh list, not from the one you read before.
+5. **Batch B, body**: remaining `rename_decompiler_variable` / `retype_decompiler_variable`,
+   plate comment (`set_comment` with `comment_type="plate"`), PRE and EOL comments.
+6. **Verify**: `decompile_function` again; check the plate summary matches the name.
+
+Small functions fit in one batch. Plate comments survive `set_function_prototype` on this
+server; still set names and types first so the comments describe the final names.
 
 ## Phase 3: Batch Documentation
 
-For dispatch patterns and failure modes, read the batch section in [reference/function-documentation.md](reference/function-documentation.md).
+Dispatch details: [reference/function-documentation.md](reference/function-documentation.md).
 
-- **Pre-flight**: `list_instances` + `check_tools` before dispatching any subagents
-- **Concurrency**: Max 3 parallel subagents (MCP serializes at HTTP layer)
-- **Model selection**: Sonnet default (90%+ quality at 5x lower cost). Opus only for 40+ line functions, scores below 85%, or public API entry points
-- **Target selection**: By completeness score (worst first), call graph (leaves first), undocumented (`FUN_*`/`Ordinal_*`), or neighborhood (address-adjacent)
-- **Dependency order**: Document callees before callers for better context propagation
+- **Targets**: `score_documentation(max_score=60, limit=20)` ranks functions worst-first by
+  what is missing (name, prototype, plate comment, parameters, and locals with
+  `include_locals=true`). Alternatives: the execute walk above (leaves first),
+  `list_functions(filter_pattern="^FUN_")`, or address neighbours of a documented function.
+- **Order**: callees before callers, so callers decompile with good names.
+- **Subagents**: give each the `database` id and its addresses. Requests to one database run
+  one at a time in its worker, so more than about 3 agents per database mostly wait. Writers
+  use `if_revision` and `operation_id` (rule 11).
+- **Models**: Sonnet by default; Opus for 40+ line functions, public API entry points, or a
+  retry after a poor first pass.
 
 ## Phase 4: Data Type Investigation
 
-For the complete 7-phase workflow, read [reference/data-type-investigation.md](reference/data-type-investigation.md).
+Full workflow: [reference/data-type-investigation.md](reference/data-type-investigation.md).
 
-1. **Identify**: Find parameters with generic pointer types (int*, void*, uint*)
-2. **Analyze**: Examine offset access patterns in decompiled code and disassembly
-3. **Cross-reference**: `get_function_callers` -> `batch_decompile` callers -> merge field offset maps
-4. **Search**: `search_data_types` for existing matching structures
-5. **Create**: `create_struct` + `add_struct_field` with identity-based naming (UnitAny, not InitializedUnit)
-6. **Apply**: `set_parameter_type` or `set_variables` across all functions
-7. **Verify**: Re-decompile to confirm fields resolve correctly
+1. Find parameters typed `int *`, `void *`, `undefined4`, used with offsets.
+2. Collect offset accesses from the function and its callers (`get_xrefs_to`, then
+   `decompile_function` each; `decompile_functions(filter_pattern=...)` for a named group).
+3. `list_structures(filter_pattern=...)` / `get_structure` for an existing match.
+4. Create in one batch: `parse_type_declaration` with the whole struct, or `create_structure`
+   + `add_struct_member` ops. Name by identity (`Connection`, not `InitializedConnection`).
+5. Apply in the same batch: `set_function_prototype` or `retype_decompiler_variable` with
+   `Name *` in every function that uses it.
+6. Re-decompile and confirm the fields resolve.
 
 ## Phase 5: Orphaned Code Discovery
 
-For the scanner script, classification types, and processing order, read [reference/orphaned-code-discovery.md](reference/orphaned-code-discovery.md).
+Scanner and classification: [reference/orphaned-code-discovery.md](reference/orphaned-code-discovery.md).
 
-Three-pass scanner finds valid instructions between known functions:
-- **Pass 1**: Already-disassembled instructions not in any function (HIGH confidence)
-- **Pass 2**: Raw byte prologue patterns — `55 8B EC` (PUSH_EBP+FRAME), SUB_ESP, PUSH_ESI/EDI (VARIABLE)
-- **Pass 3**: Fallback — non-padding bytes with RET (LOW confidence)
+Run the scanner with `execute(read_only=true)`: pass 1 finds disassembled instructions in no
+function (HIGH), pass 2 prologue byte patterns (`55 8B EC`, `8B FF 55 8B EC`, ...), pass 3
+non-padding runs ending in RET (LOW). Process types in the order B, C, D, F, A, E, G. Create
+approved candidates in batches of 5-10: `create_function`, then `set_comment` with a triage
+plate using `"$N.address"`. Spot-check with `decompile_function`. Re-run the scanner: new gaps
+appear as boundaries move.
 
-Classification types A-G. Processing order: B (disassembled), C (standard prologue), D (callee-save), F (getter/wrapper), A (thunk), E (atypical), G (unknown).
+## Phase 6: Call Graph
 
-For each: `create_function` -> `decompile_function` (sanity check) -> `set_plate_comment` with triage metadata. Full V6 documentation is a separate task.
-
-## Phase 6: Call Graph Analysis
-
-- `get_function_callers` / `get_function_callees` — immediate neighbors
-- `get_full_call_graph` or `analyze_call_graph` — deeper traversal
-- `get_xrefs_to` / `get_xrefs_from` — data references (strings, globals, vtables)
-- `get_bulk_xrefs` — batch cross-reference collection
-- `diff_functions` — compare two functions side by side
+`get_call_graph(address, depth=1..3)` for the caller/callee tree; `get_xrefs_to` /
+`get_xrefs_from` for single references (data, strings, vtables); `find_decompiled_calls` for
+call sites in pseudocode; `get_basic_blocks` / `get_cfg_edges` for control flow inside a
+function; `execute` for transitive walks (example above).
 
 ## Phase 7: Security Analysis
 
-- `detect_malware_behaviors` — behavioral pattern categories
-- `find_anti_analysis_techniques` — packing, anti-debug, VM detection
-- `extract_iocs_with_context` — strings, IPs, domains, file paths, registry keys
-- `analyze_api_call_chains` — threat-relevant API call patterns
-- Follow up with targeted decompilation of flagged functions
+- `list_imports(module_filter=...)` and `search_text(pattern="CALL.*(VirtualAlloc|CreateRemoteThread|WriteProcessMemory)")`
+  for injection, persistence, network and crypto APIs.
+- `list_strings` / `find_code_by_string` for URLs, IPs, registry keys, paths, mutex names;
+  `search_bytes` for crypto constants and known signatures.
+- Strings that name APIs but are absent from imports mean runtime resolution
+  (`GetProcAddress`, `dlsym`): follow them with `find_code_by_string`.
+- Anti-analysis: `search_text` for `rdtsc`, `cpuid`, `int3`, and `IsDebuggerPresent`
+  references; `get_analysis_problems` for bad disassembly in packed regions.
+- Decompile and document every flagged function (Phase 2).
+
+## Ghidra Server
+
+A `ghidra://` program is read-only until `checkout_file(exclusive=false)`; before that
+`save_database` fails with `ReadOnly`. `get_version_state` shows checkout, `can_save` and newer
+versions. `checkin_file(comment, keep_checked_out=true)` publishes a version.
+`get_version_history` and `list_checkouts` show history and holders. `undo_checkout` is
+destructive: it drops saved-but-not-checked-in work. Credentials come only from the server's
+environment (`GHIDRA_MCP_SERVER_USER` / `GHIDRA_MCP_SERVER_PASSWORD`), never tool arguments.
 
 ## Error Handling
 
+Errors are tool errors whose JSON carries `error_type`.
+
 | Symptom | Diagnosis | Fix |
-|---------|-----------|-----|
-| "No program open" | Binary not loaded | Phase 0: load via curl or `open_program` |
-| "Connection refused" | MCP server down | Restart bridge: `bash /opt/ghidra-mcp/run-mcp.sh` |
-| Plate comment disappeared | Set prototype after comment | Re-apply comments — ordering law violated |
-| `extraout_*` / `in_*` variables | Decompiler artifacts | Skip in rename/type ops, note in plate comment |
-| Variable rename fails silently | Register-only storage | `force_decompile` then retry, or use PRE_COMMENT |
-| Name collision on rename | Duplicate name exists | `search_functions_enhanced` first, differentiate name |
-| Struct field shows `undefined4` | Storage vs display mismatch | Normal — call `set_local_variable_type` explicitly |
-| `batch_decompile` timeout | Too many functions | Use smaller batches (10-20), not all at once |
-| Thunk shows no body docs | JMP-only function documented | Document both thunk AND target body function |
-| `create_function` overlap error | Shared epilogue or existing body | Skip — code belongs to adjacent function |
-| "No HighVariable found" | Stack arrays, decompiler composites | Skip on first failure, note in plate comment |
-| Score < 50% | Severe documentation gaps | Flag for manual review, do not re-dispatch |
-| `set_local_variable_type` rejects no-op | Type must actually change | Verify current type differs from target before calling |
-| `add_struct_field` replaceAtOffset | Overlays undefined bytes | Only works on undefined/padding bytes — remove existing field first if occupied |
-| `check_tools` returns `not_loaded` | Tool group not active | Use `connect_instance` or `load_tool_group` to activate |
-| Queries on a newly-loaded binary return the OLD binary's data | Loading does not switch; `current_program` still names the previous program | `switch_program(name)`, verify `is_current: true` via `list_open_programs`, or pass `program=` explicitly |
-| Two "different" binaries give identical addresses/xrefs | You are reading one binary | `list_open_programs` — do not trust `get_current_program_info` |
-| `get_current_program_info` shows a closed/wrong program | It returns cached data for a dead program | Use `list_open_programs` as source of truth |
-| Second load of a same-named file "succeeds" but isn't there | Basename collision — silently lossy | Copy to distinct basenames (`hw_steam.dll`, `hw_csns.dll`) and reload |
-| `run_analysis` returns in ~1ms with `new_functions: 0` | No-op on a `load_program`'d program (v4 headless); a huge count returned instantly is a CACHED count | Don't assume it analyzed. Use the byte-pattern workaround (see Pitfalls) or `analyzeHeadless` on the CLI |
-| `run_script_inline` -> "Script execution disabled. Set GHIDRA_MCP_ALLOW_SCRIPTS=1" | Opt-in gate, read by the JAVA server at process start — not by the bridge, and not per-request | Set it in the environment that launches the Java server, then RESTART that process. It cannot be enabled from the client mid-session. See "Enabling run_script_inline" below |
-| `run_script_inline` -> `illegal start of expression` on your `public class` line | The server WRAPS `code` in its own class/method — you passed a full class into a method body | Pass a bare METHOD BODY (`println(...); currentProgram...;`), no class, no imports, no `void run()`. `currentProgram`/`println`/`getInstructionAt` are already in scope |
-| Every later `run_script_inline` reports a build error from a script you already fixed | One failed compile leaves a broken `.java` in `~/ghidra_scripts`, and Ghidra rebuilds that whole DIRECTORY each run | `rm ~/ghidra_scripts/<Broken>.java` (and its `.java_failed`). Until you do, correct scripts still print the stale error — they may still SUCCEED, so read past it |
-| `get_function_by_address` says "No function found" at an address `nm` gave you | `.so`/PIE image base not added | Add `image_base` from `list_open_programs` (commonly `0x10000`); verify on two known symbols |
-| `search_byte_patterns` for a string's absolute address returns nothing, but the string IS used | 32-bit PIC — data is reached GOT-relative, never by absolute address | Search `disp = (target - got_base)` instead; try `.got` AND `.got.plt` |
-| `search_memory_strings` returns 0 even for a string you grepped out of the file | No strings defined — `load_program` does minimal analysis. On v6 headless the tool is absent entirely, which looks the same from the caller | Use `search_byte_patterns` with ASCII hex; always run a known-present control first |
-| `analyzeHeadless` reports "Analysis succeeded" but your call site has no enclosing function | Auto-analysis under-covers large PIC `.so` (e.g. 3.7k functions for 7.5 MB `.text`) | Do not equate "succeeded" with "the functions you need exist". Script the decode over raw bytes (`run_script_inline`) instead of relying on function discovery |
+|---|---|---|
+| `NoDatabase` / `NotReady` | Nothing open, or still opening | `open_database`, then `wait_for_analysis` |
+| `InvalidArguments` / `InvalidArgument` / `UnknownTool` | Wrong name or value | `search_tools` / `get_schema(tools=[...])`, fix, resend |
+| Batch fails with `op_index` | That op failed; nothing changed | Fix that op (often a phantom variable or a stale name), resend the batch |
+| `InvalidReference` in a batch | `$N` points at a later op or a missing path | Reference only earlier ops; check the result field name |
+| `InvalidOp` in a batch | Lifecycle, undo, analysis or script tool in a batch | Call it on its own |
+| `TargetChanged` | Program changed since your `if_revision` | Re-read, re-plan, retry with the new revision |
+| `TimeoutError` from execute | Ran past `timeout_s`; rolled back | Raise `timeout_s` (max 600) or split the work |
+| `ScriptError` / `SyntaxError` | Python or GhidraScript error; rolled back | Error carries the line and stdout so far |
+| `ReadOnly` on save | Server program not checked out | `checkout_file` |
+| `DecompilationFailed` | Decompiler gave up (60 s) | Read `disassemble_function`; check bounds with `list_function_ranges` |
+| `NotFound` renaming a variable | Name changed after a prototype edit, or a phantom | `list_decompiler_variables` again; skip phantoms |
+| `create_function` fails at a candidate | Shared epilogue or inside another body | Skip; the code belongs to a neighbour |
+| `get_function` finds nothing at an `nm` address | `.so`/PIE image base not added | Add `image_base` from `get_database_info`; verify on two known symbols |
+| `search_bytes` for a string's address finds nothing, but it is used | 32-bit PIC reaches data GOT-relative | Search `disp = target - got_base`, trying `.got` and `.got.plt` |
+| Analysis done but a call site has no function | Auto-analysis under-covers large PIC `.so` | `create_function` at the site, or decode raw bytes in `execute` |
 
 ## Critical Pitfalls
 
-- Do NOT assume a loaded binary is the current one — loading does not switch. `switch_program` + verify via `list_open_programs`, or pass `program=` explicitly. Wrong-binary answers do not error; they look correct
-- Do NOT load two files with the same basename — the second silently does not exist. Copy to distinct names first
-- Do NOT trust `get_current_program_info` — it returns cached data for closed programs. `list_open_programs` is the source of truth
-- Do NOT conclude `run_analysis` analyzed anything because it "succeeded" — ~1ms/`new_functions: 0` is a no-op, and an instant ~89k count is cached. When analysis is unavailable, skip it: `search_byte_patterns(<ascii hex of a string>)` -> VA, then `search_byte_patterns(<VA little-endian>)` -> the `PUSH <addr>` site, then `read_memory` and decode by hand. No analysis, no hang risk
-- **On a `.so`/PIE, ADD THE IMAGE BASE to every address from `nm`/`readelf`/`objdump`.** A shared object's own vaddrs start at 0; Ghidra loads it at an image base (commonly `0x10000`). `get_function_by_address` then answers "No function found", which reads as *analysis missed it* rather than *you are 64 KB low*. Read `image_base` from `list_open_programs` FIRST, confirm the delta on two known symbols, and do NOT rebase addresses that came FROM Ghidra
-- **On a 32-bit PIC `.so`, absolute-address byte search finds NOTHING.** Code references data as `lea reg,[GOTreg + disp32]`, so searching a string's little-endian absolute address returns no hits — indistinguishable from "this string is never used". Compute `disp = (target - got_base) & 0xFFFFFFFF` and search those 4 bytes. Try BOTH `.got` and `.got.plt` as the base (one yields exactly one hit in `.text`, the other none), and do not assume the GOT register is `ebx` — GCC picks per function
-- Do NOT use GUI tools in headless mode — `launch_codebrowser`, `goto_address`, `get_current_selection` will fail or return meaningless results
-- Always use `import_file` to load binaries — it runs `analyzeHeadless` directly
-- Do NOT set comments before prototype — `set_function_prototype` WIPES plate comments. Always: types -> names -> prototype -> comments
-- Do NOT retry phantom variables (`extraout_*`, `in_*`) — they are decompiler artifacts, not fixable
-- Do NOT trust decompiler display types for storage — `get_function_variables` may show `int` display but `undefined4` storage. Always check and explicitly set types
-- Do NOT assume register-only variables survive prototype changes — verify with `get_function_variables` after `set_function_prototype`
-- Do NOT document only the thunk (JMP stub) — the implementation body function also needs renaming, prototype, and comments
-- Do NOT dump all functions without limit — `list_functions` and `batch_decompile` without offset/limit will blow context budget
-- Do NOT use uppercase Windows types (DWORD, BYTE, USHORT) in type-setting operations — always normalize to lowercase builtins (uint, byte, ushort)
-- Do NOT skip `search_functions_enhanced` before renaming — name collisions across parallel subagents cause silent overwrites
-- Do NOT create functions at switch/case table data — verify with `get_xrefs_to` that the address isn't a jump table entry
-- Do NOT use `force_decompile` for final verification — scoring is external in v5
-- Do NOT use `batch_rename_variables` — it was renamed to `rename_variables` in v5.0.0
-- Do NOT call `analyze_function_completeness` inside the documentation workflow — scoring is external in v5, not part of the per-function protocol
-- Do NOT manually add Hungarian prefixes to struct field names — the server auto-prefixes them on `create_struct`, `add_struct_field`, and `modify_struct_field`
+- Do NOT put a phantom variable or a guessed name in a batch: one failing op discards the
+  whole batch. Use `dry_run=true` when unsure.
+- Do NOT reuse a pre-rename symbol name (`FUN_...`, `DAT_...`) later in the same batch; use
+  the address from the rename's result (`"$N.address"`).
+- Do NOT forget `save_database`: batches and execute change only the open program.
+- Do NOT trust decompiler display types for storage: check `list_decompiler_variables` and set
+  types explicitly.
+- Do NOT create functions in switch/jump tables: check `get_xrefs_to` and `get_switch_info`.
+- Do NOT run a long loop through `run_ghidra_script`: it cannot be interrupted. Use `execute`
+  with `timeout_s`.
+- Analysis-created names (`FUN_`, `DAT_`, `LAB_`) are default names: any rename replaces them.
+  `rename_symbol` renames or creates the label at an address, globals included.
 
 ## Self-Refinement Protocol
 
-After completing a Ghidra RE task, if you discovered something non-obvious (a decompiler
-quirk, a binary-specific pattern, a tool behavior), **apply it to the skill itself** —
-`LEARNINGS.md` is a staging buffer, not the destination. Nothing reads `LEARNINGS.md`
-during a session, so a learning parked there does no work.
-
-Put it where it will actually be read:
-
-| Kind of learning | Destination |
-|---|---|
-| A rule to follow every session | General Rules (above) |
-| "X looks like Y but is actually Z" | Critical Pitfalls |
-| A symptom you can observe | Error Handling table (symptom / diagnosis / fix) |
-| Depth on loading, addressing, searching | `reference/headless-operations.md` |
-| A tool misbehaving | `reference/gotchas.md` |
-| Workflow depth | the matching `reference/*.md` |
-
-Use `LEARNINGS.md` only to park something you cannot place yet — then fold it in and
-delete the entry. A growing `LEARNINGS.md` means the skill is not being maintained.
-Never write "see LEARNINGS" into `SKILL.md`: inline the knowledge where it is needed.
+When a session teaches something non-obvious (a decompiler quirk, a binary pattern, a tool
+behaviour), put it where it will be read: a per-session rule into General Rules, "X looks like
+Y but is Z" into Critical Pitfalls, a symptom into Error Handling, loading/addressing/search
+depth into `reference/headless-operations.md`, a misbehaving tool into `reference/gotchas.md`,
+workflow depth into the matching `reference/*.md`. `LEARNINGS.md` is only a staging buffer;
+nothing reads it during a session. Never write "see LEARNINGS" here; inline the knowledge.
 
 ## Reference Files
 
-Load these as needed during your workflow:
-
-- [reference/tool-categories.md](reference/tool-categories.md) — When you need to find the right MCP tool name (~222 tools by category; live `/mcp/schema` is authoritative)
-- [reference/function-documentation.md](reference/function-documentation.md) — When documenting functions (V6 protocol + batch dispatch)
-- [reference/data-type-investigation.md](reference/data-type-investigation.md) — When investigating struct types from usage patterns
-- [reference/orphaned-code-discovery.md](reference/orphaned-code-discovery.md) — When scanning for hidden/missed functions
-- [reference/hungarian-notation.md](reference/hungarian-notation.md) — When renaming variables (type-to-prefix table)
-- [reference/headless-operations.md](reference/headless-operations.md) — When loading binaries or troubleshooting headless mode
-- [reference/gotchas.md](reference/gotchas.md) — When a tool misbehaves (empty `search_strings`, "Auto-analysis failed", load timeouts, GUI-only errors, version mismatches) — non-obvious failure modes + fixes
-- [reference/dynamic-analysis.md](reference/dynamic-analysis.md) — When static analysis leaves you stuck: confirm offsets/behavior at runtime (run the target headless under Wine, drive it live via `/proc/<pid>/mem`, `WINEDEBUG` crash triage, the clean-DLL-stub methodology, `tcpdump` protocol RE, PE rebasing/patching)
+- [reference/tool-categories.md](reference/tool-categories.md): task -> tool name map
+- [reference/function-documentation.md](reference/function-documentation.md): documentation protocol, batch dispatch
+- [reference/data-type-investigation.md](reference/data-type-investigation.md): structs from usage patterns
+- [reference/orphaned-code-discovery.md](reference/orphaned-code-discovery.md): gap scanner, types A-G
+- [reference/hungarian-notation.md](reference/hungarian-notation.md): type-to-prefix table
+- [reference/headless-operations.md](reference/headless-operations.md): opening, analysis, addressing, byte search
+- [reference/gotchas.md](reference/gotchas.md): non-obvious failure modes and fixes
+- [reference/dynamic-analysis.md](reference/dynamic-analysis.md): confirming offsets and behaviour at runtime (Wine, `/proc/<pid>/mem`, stub DLLs, tcpdump, PE rebasing)

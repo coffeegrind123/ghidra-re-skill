@@ -1,104 +1,110 @@
-# Function Documentation Protocol (V6)
+# Function Documentation Protocol
 
 ## Critical Rules
 
-1. **Ordering**: Complete ALL naming, prototype, and type changes BEFORE plate comment and inline comments. `set_function_prototype` wipes existing plate comments.
-2. **Batching**: Use `set_variables` (atomic type+rename), `batch_set_comments` (plate + optional PRE + EOL in one call). Never loop individual rename/comment calls.
-3. **Phantoms**: `extraout_*`, `in_*` variables with `undefined` types are decompiler artifacts. Note in plate comment Special Cases, skip — do not retry type-setting.
-4. **Reprocessing**: When re-documenting, always overwrite existing names/comments if analysis produces better results.
-5. **Consistency check**: Function name and plate comment must align — the plate comment's one-line summary should describe what the function name implies.
-6. **Module prefix decision**: Apply a module prefix (e.g., `Net_SendPacket`, `Gfx_DrawSprite`) using a 2-signal gate: at least 2 of (source file context, behavior domain, callee family) must agree on the module.
-7. **Struct creation gate**: Reuse existing structs first. Only create new structs when 3+ validated fields exist across 2+ code paths.
+1. **Loop**: read -> plan -> ONE labelled `batch` per coherent change -> re-read -> save. Never
+   loop single rename or comment calls.
+2. **Atomic means all or nothing**: one bad op (a phantom variable, a stale name, a type the
+   parser does not know) rolls back the whole batch. The error names `op_index`, `tool` and
+   `error_type`. Fix that op and resend. Use `dry_run=true` to validate a large plan.
+3. **Order inside a batch**: types -> function name -> prototype -> globals -> locals ->
+   comments. Plate comments survive `set_function_prototype` on this server; the order is so
+   comments describe final names, not to avoid a wipe.
+4. **Addresses after a rename**: the old `FUN_*` / `DAT_*` name is gone once renamed. Later ops
+   use `"$N.address"` from the rename's result, or the hex address.
+5. **Phantoms**: `extraout_*`, `in_*` variables with `undefined` types are decompiler
+   artifacts. Leave them out of batches; note them in the plate's Special Cases.
+6. **Reprocessing**: when re-documenting, overwrite names and comments if the new analysis is
+   better.
+7. **Consistency**: the plate comment's one-line summary must describe what the function name
+   says.
+8. **Module prefix**: add one (`Net_SendPacket`, `Gfx_DrawSprite`) only when at least 2 of
+   (source file context, behaviour domain, callee family) agree on the module.
+9. **Struct gate**: reuse existing structs first. Create a new one only with 3+ validated
+   fields across 2+ code paths.
 
-## Step 1: Initialize and Classify
+## Step 1: Read and Classify
 
-Call `decompile_function` and `get_function_variables` in parallel.
+Read in parallel: `decompile_function`, `list_decompiler_variables`, `get_function`
+(bounds, `signature`, `is_thunk`), `get_xrefs_from` (callees, globals, strings).
 
-From the results:
-- Verify function boundaries; recreate with correct range if incorrect
-- If `return_type_resolved` is false: verify EAX at each RET instruction
-- Validate existing names — even custom names may be wrong
-- Classify the function:
+- Check function bounds (`list_function_ranges`). Wrong bounds give wrong pseudocode.
+- If the return type looks wrong, check EAX/RAX (or the ABI return register) at each RET in
+  `disassemble_function`.
+- Existing custom names can be wrong; check them.
 
 | Classification | Criteria | Depth |
 |---|---|---|
-| **Thunk/Wrapper** | Single call, no logic | Fast path: Steps 2->6->7 only |
-| **Leaf** | No outgoing calls | Focus on algorithm, data flow |
-| **Worker** | Meaningful logic with calls | Full workflow |
-| **Init/Cleanup** | State setup/teardown | Document sequence and side effects |
-| **Callback/Handler** | Event-driven entry | Document triggers and expected state |
-| **Public API** | Exported symbol | Maximum rigor, all sections |
+| Thunk/Wrapper | Single call or JMP, no logic | Name + prototype + short plate; then document the target |
+| Leaf | No outgoing calls | Algorithm and data flow |
+| Worker | Logic with calls | Full protocol |
+| Init/Cleanup | State setup/teardown | Sequence and side effects |
+| Callback/Handler | Event-driven entry | Triggers and expected state |
+| Public API | Exported symbol | Maximum rigour, all sections |
 
-## Step 2: Rename Function + Set Prototype
+## Step 2: Plan
 
-Call `rename_function_by_address` and `set_function_prototype` in parallel.
+- **Name**: PascalCase, verb first (`ParseConfigBlock`, `ValidatePacketHeader`). Check it is
+  free: `list_functions(filter_pattern="^ParseConfigBlock$")` returns `total: 0`.
+- **Prototype**: typed struct pointers (`Connection *`, not `int *`), Hungarian camelCase
+  parameter names, Ghidra builtins (`byte`, `uint`, `ushort`, `char *`). `uint8_t`, `size_t`
+  and SDK types fail to parse unless a type archive defines them. Check the calling
+  convention in the disassembly.
+- **Globals**: every `DAT_*` and `s_*` the function uses gets a type and a `g_` Hungarian
+  name. `DAT_*` -> `g_dw` / `g_p` / `g_pfn` / `g_a` by type; `s_*` -> `g_sz` / `g_wsz` /
+  `g_szFmt` / `g_szPath`.
+- **Locals**: from `list_decompiler_variables`, decide type then name. If a variable is
+  dereferenced or used with offset arithmetic, type it as a pointer.
 
-**Naming**: PascalCase, verb-first (GetPlayerHealth, ProcessInputEvent, ValidateItemSlot). Check collisions with `search_functions_enhanced` first.
+## Step 3: Batch A, identity
 
-**Prototype**: Use typed struct pointers (UnitAny* not int*) and Hungarian camelCase params. Verify calling convention from disassembly.
+```json
+batch(database="fw_bin", label="doc ParseConfigBlock: identity",
+      if_revision=2210, operation_id="doc-4012a0-a", ops=[
+  {"tool": "rename_function", "params": {"address": "FUN_004012a0", "new_name": "ParseConfigBlock"}},
+  {"tool": "set_function_prototype", "params": {"address": "$0.address", "type_string":
+     "int ParseConfigBlock(ConfigBlock *pConfig, char *szText, uint dwLength)"}},
+  {"tool": "set_type", "params": {"address": "0x40c120", "type_string": "char *"}},
+  {"tool": "rename_symbol", "params": {"address": "0x40c120", "new_name": "g_szConfigPath"}}])
+```
 
-**Note**: Prototype changes trigger re-decompilation and may create new SSA variables. Always re-fetch variables in Step 3.
+Leave local variables for batch B: the prototype change re-runs the decompiler, so read
+their names again first.
 
-## Step 3: Type Audit + Variable Renaming
+## Step 4: Re-read
 
-**IMPORTANT**: Always call `get_function_variables` explicitly — the decompiler may display `int` or `char*` while storage is still `undefined4`. Only `get_function_variables` reveals actual storage types.
+`list_decompiler_variables` and `decompile_function` again. Look for remaining `undefined`
+types, new temporaries, and parameters the prototype did not cover. The decompiler display
+type can differ from the stored type; trust `list_decompiler_variables`.
 
-**Skip condition**: All variables have custom names AND resolved storage types (no `undefined` in type field).
+## Step 5: Batch B, body and comments
 
-**Workflow**:
-1. `get_function_variables` — check actual storage types
-2. Identify variables needing type changes and name changes
-3. For failed renames -> PRE_COMMENT. For assembly-only vars -> EOL_COMMENT.
+```json
+batch(database="fw_bin", label="doc ParseConfigBlock: body",
+      operation_id="doc-4012a0-b", ops=[
+  {"tool": "rename_decompiler_variable", "params": {"function_address": "0x4012a0",
+     "old_name": "uVar3", "new_name": "dwKeyHash"}},
+  {"tool": "set_comment", "params": {"address": "0x4012a0", "comment_type": "plate",
+     "comment": "Parses one key=value config block into pConfig.\n\nAlgorithm:\n1. ..."}},
+  {"tool": "set_comment", "params": {"address": "0x4012d4", "comment_type": "pre",
+     "comment": "Step 2: hash the key"}},
+  {"tool": "set_comment", "params": {"address": "0x4012e9", "comment_type": "eol",
+     "comment": "len > 0x100 -> reject"}}])
+```
 
-## Step 4: Atomic Variable Type+Rename
+If a rename keeps failing (register-only storage, stack arrays), drop it from the batch and
+put the meaning in a PRE comment at the first use instead.
 
-Use `set_variables` for atomic type+rename operations. This is preferred over separate `batch_set_variable_types` + `rename_variables` calls because it eliminates SSA churn — the decompiler only re-analyzes once instead of twice.
-
-**Workflow**:
-1. Build a single `set_variables` call covering ALL variables that need type changes and/or renames
-2. Use lowercase Ghidra builtins (uint, ushort, byte) for types
-3. Apply Hungarian prefixes in the rename portion — prefix must match the type being set
-4. If variable is dereferenced or has offset arithmetic -> type as pointer (`int *` not `int`)
-5. `get_function_variables` after to verify no `undefined` remains and discover new SSA variables
-6. If new SSA variables appeared, run a second `set_variables` pass
-
-## Step 5: Structures (skip if none)
-
-**Skip condition**: No field-offset patterns (+0x10, +0x14, etc.) in decompiled code.
-
-**Struct creation gate**: Reuse existing structs first (`search_data_types`). Only create new structs when 3+ validated fields exist across 2+ code paths.
-
-Use `search_data_types` to find matching types. If none exist, create with `create_struct`. (`consolidate_duplicate_types` is **not available on a v6 headless server** — confirm with `check_tools` before reaching for it.)
-
-Note: `add_struct_field` with `replaceAtOffset` behavior overlays undefined bytes only — remove existing fields first if the offset is occupied.
-
-## Step 6: Global Data (skip if none)
-
-**Skip condition**: No DAT_* or s_* names in decompiled code.
-
-Rename ALL DAT_* and s_* globals referenced by this function:
-- `apply_data_type` to set type, `rename_or_label` with g_ prefix + Hungarian notation
-- DAT_* -> g_dw/g_p/g_pfn/g_a depending on type
-- s_* -> g_sz (ANSI) / g_wsz (wide) / g_szFmt (format) / g_szPath (path)
-
-## Step 7: Plate Comment + Inline Comments
-
-**IMPORTANT**: This must be AFTER all naming/prototype/type changes are complete.
-
-Use `batch_set_comments`. The `decompiler_comments` and `disassembly_comments` arrays are now optional in v5.0.0 — you can pass only `plate_comment` if inline comments aren't needed.
-
-**Consistency check**: Verify the plate comment's one-line summary aligns with the function name. If the function is named `ValidatePacketHeader`, the summary should describe packet header validation, not something unrelated.
-
-**Plate comment format** (plain text only):
+**Plate comment format** (plain text):
 ```
 One-line function summary.
 
 Algorithm:
-1. [Step with hex magic numbers, e.g., "check type == 0x4e (78)"]
-2. [Each step is one clear action]
+1. [Step with hex magic numbers, e.g. "check type == 0x4e (78)"]
+2. [One clear action per step]
 
 Parameters:
-  paramName: Type - purpose description [IMPLICIT EDX if register-passed]
+  paramName: Type - purpose [IMPLICIT EDX if register-passed]
 
 Returns:
   type: meaning. Success=non-zero, Failure=0/NULL. [all return paths]
@@ -106,13 +112,21 @@ Returns:
 Special Cases:
   - [Edge cases, phantom variables, decompiler discrepancies]
 
-Structure Layout: (if accessing structs)
+Structure Layout: (if the function accesses a struct)
   Offset | Size | Field     | Type  | Description
   +0x00  | 4    | dwType    | uint  | ...
 ```
 
-**Decompiler PRE_COMMENTs**: At block-start addresses — context, purpose, algorithm step references. Max ~60 chars.
-**Disassembly EOL_COMMENTs**: At instruction addresses — concise, max 32 chars. Match to assembly addresses, not decompiler line order.
+PRE comments (`comment_type="pre"`, shown above the line in pseudocode): at block starts,
+about 60 characters. EOL comments (`"eol"`): at instruction addresses, about 32 characters.
+Match them to assembly addresses, not decompiler line order.
+
+## Step 6: Verify and save
+
+`decompile_function` once more; the plate summary must match the name.
+`score_documentation(filter_pattern="^ParseConfigBlock$", include_locals=true)` should return
+no items (the default `max_score=99` hides fully documented functions).
+`save_database(database, comment="doc ParseConfigBlock")`.
 
 ## Output
 
@@ -127,63 +141,65 @@ Changes: [brief summary]
 
 ### Pre-flight
 
-1. `check_connection` — if connection refused, stop immediately
-2. Verify program is loaded: `get_current_program_info`
+1. `list_databases`: the database is open and ready. If not, `open_database` +
+   `wait_for_analysis`.
+2. Pick targets (below). Give each subagent the `database` id.
 
-### Dispatch Pattern
+### Target selection
 
-Max 3 subagents at once. Each subagent follows the V6 protocol above independently.
+- **By gaps**: `score_documentation(max_score=60, limit=20)` returns `items` of
+  `{address, name, score, missing}`, worst first. `include_locals=true` also checks local
+  names (one decompile per listed function, slower).
+- **By call graph**: leaves first. `execute(read_only=true)` walking `getCalledFunctions` (see
+  SKILL.md) returns unnamed functions deepest first.
+- **By name**: `list_functions(filter_pattern="^FUN_", limit=50)`.
+- **By neighbourhood**: a documented anchor, then the undocumented functions next to it.
+
+Document callees before callers.
+
+### Dispatch
+
+Each database is served by one worker, and writes to it run one at a time. More than about 3
+subagents per database mostly wait.
 
 ```
 Agent(
-  model: "sonnet",  // default
-  description: "Document FunctionName",
-  prompt: "Follow the V6 function documentation protocol to document
-  the function at address 0xADDRESS (currently named 'FUN_XXXXXXXX').
+  model: "sonnet",
+  description: "Document FUN_004012a0",
+  prompt: "Use the ghidra-re skill. Database id: fw_bin. Document the function at 0x4012a0
+  (currently FUN_004012a0) with the function documentation protocol.
 
-  CRITICAL reminders:
-  - Call get_function_variables to check actual storage types
-  - Use set_variables for atomic type+rename (not separate calls)
-  - If variable is dereferenced -> type as pointer, not int
-  - Document BOTH thunk AND body for JMP stubs
-  - search_functions_enhanced before renaming to check collisions
-  - batch_set_comments decompiler/disassembly arrays are optional
-  - Do NOT call analyze_function_completeness (scoring is external)
-
-  Return DONE output when complete."
+  - Read first: decompile_function, list_decompiler_variables, get_function, get_xrefs_from.
+  - Check the name is free with list_functions(filter_pattern='^Name$').
+  - Two batches (identity, then body and comments), each with a label, if_revision from your
+    last read, and operation_id 'doc-4012a0-a' / 'doc-4012a0-b'.
+  - On TargetChanged: re-read and retry. Leave extraout_/in_ variables out.
+  - If it is a thunk, also document the function it jumps to.
+  - save_database when done. Return the DONE block."
 )
 ```
 
-### Model Selection
+### Model selection
 
 | Condition | Model |
-|-----------|-------|
-| Default (90%+ of functions) | Sonnet |
+|---|---|
+| Default | Sonnet |
 | 40+ decompiled lines, deep algorithm | Opus |
-| First-pass Sonnet score < 85% | Opus retry |
 | Public API entry point | Opus |
+| Poor first pass (score still low) | Opus retry |
 
-### Target Selection Strategies
+### Common failure modes
 
-**By completeness score**: `batch_analyze_completeness` -> filter < 70% -> sort ascending (worst first)
+- **Name collisions**: two subagents pick the same name. Check before renaming; after a round,
+  `list_functions(filter_pattern=...)` for duplicates.
+- **Thunk-only documentation**: the stub is named, the body is still `FUN_*`. Check the JMP
+  target.
+- **`p` prefix on an `int`**: a dereferenced variable must be typed as a pointer.
+- **Batch rolled back on one variable**: re-read the variable list; the name changed or it is a
+  phantom.
+- **Retry applied twice**: use `operation_id` on every write a subagent might resend.
 
-**By call graph**: `get_function_call_graph` -> topological sort -> leaves first, callers after
+### Error handling
 
-**By undocumented**: `list_functions` filtered to `FUN_*` or `Ordinal_*` prefix -> batches of 3
-
-**By neighborhood**: Pick documented anchor -> `list_functions` for adjacent undocumented entries
-
-### Common Failure Modes
-
-- **Register-only variables losing symbols**: Call `force_decompile` first to refresh, then retry `get_function_variables`
-- **Storage still `undefined4` despite display type**: Explicitly call `set_local_variable_type` with the same type to resolve
-- **Thunk-only documentation**: Subagent renames thunk but not implementation body. Verify by checking the body address
-- **Name collisions**: Subagents choosing names independently may assign same name. Search for duplicates after each batch
-- **`p`-prefix variable typed as `int`**: If variable is dereferenced, must be typed as pointer (`int *`)
-- **"No HighVariable found"**: Common for stack arrays. Skip on first failure, note in plate comment
-
-### Error Handling
-
-- Subagent timeout/connection error: retry once, then skip and log
-- Score < 50%: flag for manual review
-- Score 50-70% with only unfixable deductions (`all_deductions_unfixable`): accept as complete
+- Subagent tool error: read `error_type`, fix, retry once; then skip and log the address.
+- Score still under 50 after a pass: flag for manual review.

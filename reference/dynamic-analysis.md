@@ -6,15 +6,16 @@ When a static-only pass leaves you stuck — a struct offset you can't fully res
 factory you can't tell returns NULL or an object, a DLL that loads on Windows but
 crashes under your harness — these runtime techniques close the loop.
 
-The worked examples below are from driving a real 32-bit Windows game client
+The worked examples below are from driving a real 32-bit Windows client
 (`target.exe` + `engine.dll`) **headless under Wine in a container**, reading/writing its live
 memory via `/proc/<pid>/mem`, and replacing crashing native DLLs with clean stubs whose
 vtable layout was recovered by RE. The helper tools referenced (a PE rebaser, an RVA
 byte-patcher, per-DLL stub builds) are generic and easy to reproduce.
 
 Cross-references:
-- [headless-operations.md](headless-operations.md) — the `analyzeHeadless` + Java-`GhidraScript`
-  decompile fallback (used here to read vtable dispatches), and Ghidra image-base math.
+- [headless-operations.md](headless-operations.md) — scripted decompiles (`execute`,
+  `run_ghidra_script`, or `analyzeHeadless` on the CLI; used here to read vtable
+  dispatches), and Ghidra image-base math.
 - [gotchas.md](gotchas.md) — "Live-memory RE: match the EXACT binary the target maps",
   and image-base-relative address math (`RVA = ghidra_addr − image_base`,
   `live_addr = runtime_base + RVA`).
@@ -44,9 +45,8 @@ xdpyinfo -display :99 >/dev/null 2>&1 || \
   exit 137). Use `setsid` + redirect, background it, then poll:
 
   ```bash
-  cd "$GAMEDIR"
-  setsid wine target.exe -game <mod> -window -width 640 -height 480 \
-    -noip -nojoy -noaudio -insecure -soft </dev/null >/tmp/hl.log 2>&1 &
+  cd "$APPDIR"
+  setsid wine target.exe <app flags> </dev/null >/tmp/app.log 2>&1 &
   ```
 
   **`</dev/null` is mandatory.** Without it, wine/wineserver inherit the caller's pipe
@@ -61,7 +61,7 @@ xdpyinfo -display :99 >/dev/null 2>&1 || \
   `MessageBox` no one can dismiss:
 
   ```bash
-  wine reg delete "HKCU\Software\<Vendor>\<Game>\Settings" \
+  wine reg delete "HKCU\Software\<Vendor>\<App>\Settings" \
     /v CrashInitializingVideoMode /f >/dev/null 2>&1
   ```
 
@@ -92,7 +92,7 @@ Prints every dispatched exception with `code=`, `addr=`, `ip=`, `info[0]`, `info
 the SEH handler chain.
 
 ```bash
-WINEDEBUG=+seh ...   then:   grep -aE "code=c0000005|info\[" /tmp/hl.log
+WINEDEBUG=+seh ...   then:   grep -aE "code=c0000005|info\[" /tmp/app.log
 ```
 
 - `info[0]` = fault kind: **0 = read / execute-fetch**, **1 = write**.
@@ -254,8 +254,8 @@ page commit, but then **breaks IAT binding** → a new exec fault in the `.rdata
 `DllMain{ return TRUE; }`, KERNEL32-only dependencies, no relocation / anti-tamper /
 packing, exporting exactly the symbols the consumer imports, has no page to fail to commit
 and loads deterministically. Proven 6× in a real RE project: `mss32`, `ddraw`, `SDL2`,
-`steam_api`, `htmlctl` (and the wined3d-reservation that `ddraw` pulled in). Stubs live
-in `<name>-stub/` with a `build.sh`; deploy each over the game-dir DLL with
+a platform-SDK DLL, an HTML-control DLL (and the wined3d-reservation that `ddraw` pulled in).
+Stubs live in `<name>-stub/` with a `build.sh`; deploy each over the app-dir DLL with
 `docker cp` (§7).
 
 ### Confirming relocation is the trigger — and rebasing as an alternative fix
@@ -323,7 +323,7 @@ Watcom/MSVC-decorated name, e.g. `_AIL_startup@0`):
 Some DLLs hand the consumer a C++-style object via a `CreateInterface(name)` factory; the
 consumer then calls vtable slots and **often derefs the result with no NULL check** — so
 returning NULL from the factory crashes the consumer. You must return a *real* object
-whose vtable has working slots. The discipline (from `{steam,htmlctl}-stub/`):
+whose vtable has working slots. The discipline (from the SDK and HTML-control stubs):
 
 1. **Implement every actually-invoked slot with the CORRECT callee-cleanup `ret N`** via
    `__attribute__((thiscall))` — `N = stack-arg-bytes` (1 stack arg → `ret 4`, 2 → `ret 8`,
@@ -371,7 +371,7 @@ whose vtable has working slots. The discipline (from `{steam,htmlctl}-stub/`):
 4. Implement that slot (`THISCALL`, correct `ret N`), wire it into the vtable in `DllMain`,
    `build.sh`, `docker cp`, relaunch. Repeat until the consumer stays alive.
 
-Real worked stubs: `{mss32,ddraw,sdl2,steam,htmlctl}-stub/`.
+Real worked stubs: `{mss32,ddraw,sdl2,<sdk>,<htmlctl>}-stub/`.
 
 ---
 
@@ -429,7 +429,7 @@ tcpdump -i any -n host <server-ip>          # sizes / direction / rate
   **Caveat:** encrypted/compressed netchan payloads won't be readable — only the
   connectionless/handshake portion is.
 - **Prove reachability independently of the binary.** A small Python UDP probe (e.g. a
-  game's A2S query) confirms the *server* is up and answering, separating "server is
+  protocol's own status query) confirms the *server* is up and answering, separating "server is
   unreachable" from "the binary isn't sending."
 
 ---

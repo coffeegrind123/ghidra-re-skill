@@ -1,190 +1,166 @@
 # Headless Operations Reference
 
-## Binary Loading
+ghidra-mcp-next runs Ghidra headless through pyghidra. One worker process serves each open
+database.
 
-Two paths, with very different analysis behavior — pick by what you need:
+## Opening programs
 
-- **`load_program(file=<path>)`** — IS exposed as an MCP tool in v5.12.0 and still in v6.0.0 (the HTTP-endpoint
-  table below predates this; it is no longer bridge-only). Loads the PE FAST but with **only
-  minimal analysis** (exports/symbols; e.g. a 1.5 MB engine shows ~300 functions, not
-  thousands), so a target address usually has **no function created** yet —
-  `decompile_function` returns `"No function found"`. Workflow for a few specific functions:
-  ```
-  load_program(file=…)  ->  create_function(address=0x…, name="X")  ->  decompile_function(0x…)
-  ```
-  Do NOT call `run_analysis` to "finish" it — full auto-analysis can **hang for many minutes**
-  on a large binary (param-ID + decompiler analyzers stall on pathological functions). Just
-  create the handful of functions you actually need.
-- **`import_file(file_path=…, auto_analyze=true)`** — runs the full `analyzeHeadless` pass (all
-  functions + xrefs). Slower, same hang risk on big binaries. Needed when you want
-  whole-program xrefs: `get_function_callers`/`get_function_callees`/`get_xrefs_to` return
-  **nothing** on a `load_program`'d partial program (no xref pass ran).
+| Source | Call |
+|---|---|
+| A binary | `open_database(file_path="/path/to/binary", run_auto_analysis=true)` |
+| A program in an existing project | `list_project_files(project="/path/to/proj.gpr")`, then `open_database(file_path="/path/to/proj.gpr", program="/folder/prog")` |
+| A Ghidra Server program | `open_database(file_path="ghidra://host[:port]/repo/folder/prog")` |
 
-After loading: `get_current_program_info` to verify image base / arch / `function_count` (a
-low count == partial `load_program` state).
+- `open_database` returns at once with `{status: "opening", database, ...}`. Call
+  `wait_for_analysis(database=...)` before any other tool; others are refused until it is
+  ready. `wait_for_analysis(databases=[...])` returns when ONE of several is ready.
+- A binary is imported into `<its dir>/ghidra_projects/`, which must be writable. Re-opening
+  an open program returns its existing id. `database_id="srv"` picks the id yourself.
+- `run_auto_analysis=true` for a fresh import. An already analyzed project program does not
+  need it.
+- `force_new=true` is destructive: it deletes the existing project and all annotations, then
+  re-imports.
+- Wrong processor (raw firmware, unusual formats): `list_targets`, then re-open with
+  `language="ARM:LE:32:v8"` and `compiler_spec="default"` (values from `list_targets`).
+- Several databases can be open at once. Every tool call names its `database`; there is no
+  current program. `list_databases` recovers ids. `GHIDRA_MCP_MAX_WORKERS` may cap how many
+  are open.
 
-**`load_program`-loaded programs are EPHEMERAL**: `save_program` fails ("Location does not
-exist for a save operation") and `list_project_files` needs GUI mode, so names/comments you
-add live only for the session. For persistent annotation, `import_file` into a project or run
-`analyzeHeadless` on the CLI.
+After `wait_for_analysis`: `get_database_info` for `processor`, `bitness`, `image_base`,
+`function_count`, `min_address`/`max_address`.
 
-## HTTP-Only Endpoints
+## Analysis time and coverage
 
-These exist on the headless server but are NOT in the MCP bridge:
+- Full auto-analysis of a large binary takes minutes; `wait_for_analysis` blocks until done.
+  Decompiler-based analyzers can stall on pathological functions.
+- `run_auto_analysis` re-runs full analysis on an open program and waits. It really analyzes:
+  it returns `functions_before`, `functions_after` and `seconds`. It blocks the database
+  meanwhile. It is refused inside `batch`.
+- `reanalyze_range(start_address, end_address)` disassembles a range and then runs the
+  auto-analysis pass over the program. Use it after patching or creating code in one place.
+- When you need only a few functions in a big binary, skip whole-program analysis: open
+  without `run_auto_analysis`, then `create_function(address)` + `decompile_function` for the
+  addresses you need. Xrefs and strings stay sparse in that state.
+- **"Analysis finished" does not mean the functions you need exist.** On a large 32-bit PIC
+  `.so`, full analysis was measured at 3,752 functions for 7.5 MB of `.text`, leaving
+  confirmed call sites with no enclosing function and `get_xrefs_to` empty (Ghidra does not
+  resolve GOT-relative data refs on i386 PIC). Then stop coaxing function discovery: decode
+  the raw bytes in `execute`, which needs no functions.
 
-| Endpoint | Method | Params | Purpose |
-|----------|--------|--------|---------|
-| `/load_program` | POST | `file=<path>` | Import and load binary from disk |
-| `/close_program` | POST | `name=<name>` | Close a loaded program |
-| `/open_project` | POST | `path=<path>` | Open existing .gpr project |
-| `/close_project` | POST | (none) | Close current project |
-| `/load_program_from_project` | POST | `path=<path>` | Load program from within project |
-| `/get_project_info` | GET | (none) | Current project details |
-| `/create_project` | POST | `parentDir`, `name` | Create new project |
-| `/delete_project` | POST | `projectPath` | Delete project |
+## Saving
 
-Default server address: `http://127.0.0.1:8089`
+Nothing reaches disk until `save_database(database, comment)`. `close_database` saves unless
+`save=false`. Large programs can take minutes to save. A Ghidra Server program must be checked
+out first, or the save fails with `ReadOnly`.
 
-## Headless Limitations
+## Ghidra Server
 
-These tools require GUI mode and will fail or return meaningless results in headless:
-- `launch_codebrowser` — no GUI to launch
-- `goto_address` — no GUI cursor
-- `get_current_selection` — no GUI selection
-- `get_current_address` — no GUI cursor
-- `get_current_function` — no GUI context
+- Programs opened from `ghidra://` are read-only until `checkout_file(exclusive=false)`.
+- `get_version_state`: `checked_out`, `can_save`, `version`, `latest_version`.
+- `checkin_file(comment, keep_checked_out=true)` saves and publishes a version.
+- `get_version_history`, `list_checkouts`.
+- `undo_checkout` discards the checkout and every change since it, saved or not.
+- Credentials only from the server's environment: `GHIDRA_MCP_SERVER_USER`,
+  `GHIDRA_MCP_SERVER_PASSWORD`. They are never tool arguments.
 
-Use address-based alternatives: `get_function_by_address`, `decompile_function` (by name or address).
+## Scripts
 
-## Initial Recon Pattern
+- `execute(database, code, read_only=true)` for reads; without `read_only` for edits. Python
+  3 through pyghidra with `program`, `flat`, `monitor`, `toAddr`, `decompile`, `tools`.
+  `timeout_s` up to 600, checked between Python lines.
+- `run_ghidra_script(script, args)` for existing Java or Python GhidraScripts, by name
+  (`list_ghidra_scripts` searches `GHIDRA_MCP_SCRIPT_DIRS`, `~/ghidra_scripts`, then Ghidra's
+  bundled script dirs) or absolute path. Java scripts need a JDK; Ghidra compiles them on first
+  use. One transaction, rolled back if the script throws. No time limit.
+- CLI fallback when no server is available: `analyzeHeadless <projdir> <name> -import <bin>
+  -postScript <Script>` runs the same GhidraScripts. Put the project outside any directory
+  shared through a container bind mount.
 
-1. `list_exports` — exported functions, ordinals, entry points
-2. `list_imports` — libraries, APIs (runtime-loaded APIs won't appear here)
-3. `list_strings` with `filter` param — interesting strings (IPs, paths, format strings, error messages, API names)
+## Initial recon pattern
 
-## Finding Code
+1. `list_exports`: exported functions, ordinals.
+2. `list_imports(module_filter=...)`: libraries, APIs (runtime-resolved APIs are absent).
+3. `list_strings(filter_pattern=...)`: IPs, paths, format strings, errors, API names.
+4. `find_code_by_string(pattern=...)`: from a string to the code that uses it.
 
-- `search_byte_patterns` — find references to string addresses or byte sequences
-- `get_xrefs_to` — cross-references to an address (only works if Ghidra analyzed the referring code)
-- `get_function_by_address` — check if address is inside a known function
+## Finding code
 
-## Address bases — add the image base to anything from binutils
+- `search_bytes(pattern="...")`: references to addresses or byte sequences (exact bytes, no
+  wildcards; `limit` defaults to 20).
+- `search_text(pattern=...)`: regex over every instruction's text.
+- `get_xrefs_to`: references to an address (only where analysis created them).
+- `get_address_info`: what is at an address, its name, xref counts, containing function.
+- `get_xrefs_to` stopping at its `limit` (default 100) is itself a signal: a global with 100+
+  references is a central state or config variable.
 
-A shared object's own vaddrs start at 0; Ghidra loads it at an **image base** (commonly
-`0x00010000`). So **every** address from `nm` / `readelf` / `objdump` must have that base
-added before it means anything to Ghidra.
+## Address bases: add the image base to anything from binutils
 
-Measured on a real `.so`: `ammo_357` `nm` `0x004b5928` → Ghidra `0x004c5928`;
-`ammo_556clip` `0x003f2f68` → `0x00402f68`. All exactly `+0x10000`.
+A shared object's own vaddrs start at 0; Ghidra loads it at an image base (commonly
+`0x00010000`). Every address from `nm` / `readelf` / `objdump` must have that base added
+before it means anything to Ghidra. Measured on a real `.so`: symbol addresses from `nm` were
+all exactly `+0x10000` in Ghidra.
 
-The failure mode is silent and misleading — `get_function_by_address` answers
-**"No function found"**, which reads as *analysis missed it* rather than *you are 64 KB
-too low*.
+The failure is silent: `get_function` finds no function, which reads as "analysis missed it"
+rather than "you are 64 KB low".
 
-- Read `image_base` from `list_open_programs` **first**.
-- Confirm the delta on **two** known symbols before trusting a sweep.
-- Addresses obtained **from** Ghidra (`search_byte_patterns`, `search_functions_enhanced`)
-  are already in Ghidra space — do **not** rebase those.
+- Read `image_base` from `get_database_info` first.
+- Confirm the delta on two known symbols before trusting a sweep.
+- Addresses that came from Ghidra (`search_bytes`, `list_functions`) are already in Ghidra
+  space: do not rebase them.
+- RVA = Ghidra address - image base; live address = runtime base + RVA.
 
-## Data Pattern Searching
+## Data pattern searching
 
 When `get_xrefs_to` returns nothing (common for data in unanalyzed regions):
-1. Take target address (e.g., `0x0044ebac`)
-2. Convert to little-endian bytes: `ac eb 44 00`
-3. `search_byte_patterns` with those bytes
-4. Finds any code referencing that address as immediate operand
+1. Take the target address, e.g. `0x0044ebac`.
+2. Little-endian bytes: `ac eb 44 00`.
+3. `search_bytes(pattern="ac eb 44 00")`.
+4. Each hit is code using that address as an immediate.
 
-### ⚠ This does NOT work on a 32-bit PIC shared object
+A string with no xrefs: `search_bytes` with the string's ASCII hex gives its address; then
+`search_bytes` with that address little-endian gives the `PUSH <addr>` site; then
+`decode_instructions` around it. No analysis needed.
 
-Position-independent code does not reference data by absolute address — it uses
-`lea reg,[GOTreg + disp32]`. Searching the absolute address returns **"No matches found"**,
-which is indistinguishable from "this string is never referenced". It is referenced; the
-reference is encoded as a displacement.
+### This does not work on 32-bit PIC shared objects
+
+Position-independent code reaches data with `lea reg,[GOTreg + disp32]`. Searching the
+absolute address returns nothing, which looks the same as "never referenced".
 
 ```python
 disp = (target_addr - got_base) & 0xFFFFFFFF   # search these 4 bytes, little-endian
 ```
 
-- Get candidate bases from `list_segments`: try **both** `.got` and `.got.plt`. One
-  produces exactly one hit in `.text`, the other none. (Measured: the linker used `.got`,
-  not `.got.plt`.)
-- The GOT register is whatever GCC picked for that function — **not necessarily `ebx`**
+- Get candidate bases from `list_memory_blocks`: try both `.got` and `.got.plt`. One gives
+  exactly one hit in `.text`, the other none. (Measured: the linker used `.got`.)
+- The GOT register is whatever GCC picked for that function, not necessarily `ebx`
   (observed: `esi`). Do not filter on the register.
-- Sanity-check direction with a string you know is used before concluding anything.
+- Test the method with a string you know is used before concluding anything.
 
-### "Analysis succeeded" ≠ the functions you need exist
+## Dynamic imports
 
-A full `analyzeHeadless` pass on a large PIC `.so` can still under-cover badly — measured
-**3,752 functions for 7.5 MB of `.text`**, leaving confirmed call sites with no enclosing
-function and `get_xrefs_to` empty (Ghidra does not resolve GOT-relative data refs on i386
-PIC either). When that happens, stop trying to coax function discovery and **script the
-decode over raw bytes** with `run_script_inline`, which needs no functions at all.
+APIs loaded at runtime (`GetProcAddress`, `dlsym`): the API names appear in `list_strings`
+but not in `list_imports`. `find_code_by_string(pattern="^sendto$")` finds the loading code;
+without defined strings, use the byte-search chain above.
 
-## Dynamic Imports
+## Unanalyzed code
 
-Some binaries load APIs at runtime via `GetProcAddress`:
-- API name strings (e.g., "sendto", "recvfrom") appear in `list_strings` but NOT `list_imports`
-- Search for the string address bytes to find the loading code
+Auto-analysis may miss functions (common in Delphi/BCB binaries):
+1. `read_bytes(address, size=64)` to see raw bytes.
+2. Look for prologues: `55 8B EC` (push ebp; mov ebp, esp).
+3. `create_function(address)` at the prologue (in a batch for several).
+4. `decompile_function` to check.
 
-## Unanalyzed Code
+For a systematic sweep, see [orphaned-code-discovery.md](orphaned-code-discovery.md).
 
-Ghidra auto-analysis may miss functions (common in Delphi/BCB binaries):
-1. `read_memory` to examine raw bytes
-2. Look for function prologues: `55 8B EC` (push ebp; mov ebp, esp)
-3. `create_function` at the prologue address
-4. `decompile_function` to get pseudocode
+## Server configuration (for whoever runs the server)
 
-## Enabling `run_script_inline` (the bulk-extraction lever)
+| Variable | Meaning |
+|---|---|
+| `GHIDRA_INSTALL_DIR` | Ghidra installation (auto-detected if unset) |
+| `GHIDRA_MCP_SCRIPT_DIRS` | Extra GhidraScript dirs, `:`-separated |
+| `GHIDRA_MCP_DISABLE_EXECUTE=1` | Removes `execute` |
+| `GHIDRA_MCP_DISABLE_BATCH=1` | Removes `batch` |
+| `GHIDRA_MCP_MAX_WORKERS` | Most databases open at once |
+| `GHIDRA_MCP_SERVER_USER` / `GHIDRA_MCP_SERVER_PASSWORD` | Ghidra Server credentials |
 
-`/run_script_inline` is gated by **`GHIDRA_MCP_ALLOW_SCRIPTS=1`** and defaults to OFF, because it
-executes arbitrary Java inside the Ghidra process. Two things about the gate are easy to get
-wrong and cost a lot of time:
-
-- **The JAVA server reads it, not the Python bridge**, and it reads it **at process start**. So
-  it cannot be turned on from the client, mid-session, or by re-connecting. The bridge does not
-  spawn the server (there is no `Popen` in it) — a launcher backgrounds Java and then `exec`s
-  the bridge, which is why `ps` shows Java as the bridge's *child* and why Java inherits the
-  launcher's environment.
-- **The bridge tolerates the server restarting** (`dispatch.py::_try_reconnect`, "reconnect to
-  the previously connected project after Ghidra restarts"). So the fix is: restart the Java
-  process with the flag, on the same port, and carry on — no Claude Code restart needed.
-
-```sh
-# capture the EXACT argv so the relaunch differs only in environment
-tr '\0' '\n' < /proc/<javapid>/cmdline > /tmp/argv.txt
-# ...kill <javapid>, wait for :8089 to free, then re-exec argv with:
-#   GHIDRA_MCP_ALLOW_SCRIPTS=1
-curl -s http://127.0.0.1:8089/check_connection      # readiness (~10s)
-tr '\0' '\n' < /proc/<newpid>/environ | grep ALLOW_SCRIPTS   # PROVE the flag took
-```
-
-⚠ **A restart drops every loaded program** — reload after. ⚠ The port is shared, so a restart
-disturbs any other session using Ghidra; it is recoverable (they reconnect), but it is not free.
-For a permanent fix, set it where the server is launched (in this setup,
-`launch_ghidra_mcp.py` passes an `env=` to `Popen`).
-
-### Writing the script: it is a BODY, not a class
-
-The `code` parameter is wrapped by the server in its own generated class. Passing a full
-`public class X extends GhidraScript { public void run() {...} }` fails to compile with
-`illegal start of expression` pointing at your class declaration — which reads like a Java
-syntax error in your code and is not one.
-
-```java
-// correct — bare statements; currentProgram / println / getInstructionAt already in scope
-println("image_base=" + currentProgram.getImageBase());
-println("functions=" + currentProgram.getFunctionManager().getFunctionCount());
-```
-
-⚠ **A failed compile is sticky.** Ghidra rebuilds all of `~/ghidra_scripts` on every run, so one
-broken file makes *every later script* print that same stale error — including scripts that then
-run fine. Delete the offender (`rm ~/ghidra_scripts/<Broken>.java*`) and read past the noise
-before concluding your new script is broken.
-
-## Server Management
-
-- Start: `bash /opt/ghidra-mcp/run-mcp.sh`
-- The script starts headless Ghidra server (background) + Python MCP bridge (stdio)
-- Java options: `-Xmx4g -XX:+UseG1GC`
-- Java 21 LTS required (Ghidra 12.1)
-- Server port configurable via `GHIDRA_MCP_PORT` env var (default 8089)
+Requirements: Ghidra 12.0 or newer, JDK 21 (a JDK, to compile Java GhidraScripts).
