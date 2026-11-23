@@ -297,6 +297,16 @@ function; `execute` for transitive walks (example above).
   references; `get_analysis_problems` for bad disassembly in packed regions.
 - Decompile and document every flagged function (Phase 2).
 
+## Across Builds
+
+Several databases can be open at once. To carry work from a documented build to a new one:
+`match_functions(source_database, target_database)` first (read-only: it pairs functions
+whose hash is unique on both sides), then `propagate_documentation(...)` (names,
+prototypes, plate and line comments, labels, locals, and the data types they use; one undo
+step; `dry_run=true` to preview). For changed functions use `algorithm="fuzzy"` and review
+`score`. `diff_functions_across` shows what changed in a pair. Comments and labels copy
+only between bodies of identical layout.
+
 ## Ghidra Server
 
 A `ghidra://` program is read-only until `checkout_file(exclusive=false)`; before that
