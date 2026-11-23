@@ -306,6 +306,14 @@ versions. `checkin_file(comment, keep_checked_out=true)` publishes a version.
 destructive: it drops saved-but-not-checked-in work. Credentials come only from the server's
 environment (`GHIDRA_MCP_SERVER_USER` / `GHIDRA_MCP_SERVER_PASSWORD`), never tool arguments.
 
+Repositories (hidden tools: reach them with `call`; no database needed, several seconds each
+because they start a JVM): `list_repositories(server="host[:port]")`,
+`create_repository(server, name)`, `list_repository_files(repository="ghidra://host/repo")`
+to find program paths. To share a binary you analyzed locally: open it, then
+`add_to_repository(repository="ghidra://host/repo/folder", comment=...)`. It saves, copies the
+program with its annotations as version 1 and returns its `url`. The open database stays the
+local copy, so open the returned `url` to keep working on the shared one.
+
 ## Error Handling
 
 Errors are tool errors whose JSON carries `error_type`.

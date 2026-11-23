@@ -62,6 +62,11 @@ out first, or the save fails with `ReadOnly`.
 - `undo_checkout` discards the checkout and every change since it, saved or not.
 - Credentials only from the server's environment: `GHIDRA_MCP_SERVER_USER`,
   `GHIDRA_MCP_SERVER_PASSWORD`. They are never tool arguments.
+- `list_repositories`, `create_repository` and `list_repository_files` need no open database;
+  each starts a short-lived JVM, so expect several seconds.
+- `add_to_repository` shares the open local program (saved first, annotations included) as
+  version 1; open the returned `url` to work on the shared copy.
+- Checkout, checkin, `undo_checkout` and `add_to_repository` are refused inside `batch`.
 
 ## Scripts
 

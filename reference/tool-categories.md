@@ -36,7 +36,7 @@ hidden: call them through `call(tool, arguments, database)`, as a `batch` op
 | Variables | `list_decompiler_variables`, `get_function_vars` |
 | What is at an address | `get_address_info`, `get_code_unit`, `get_type_info`, `read_bytes` |
 | Control flow | `get_basic_blocks`, `get_cfg_edges`, `get_switch_info`, `list_switches` |
-| Operands, registers | `get_operand_value`, `find_register_value`, `get_register_name`, `get_processor_info` |
+| Operands, registers | `get_operand_value`, `find_register_value` (constant propagation over the function), `get_register_name`, `get_processor_info` |
 | Documentation gaps | `score_documentation` |
 | Analysis problems | `get_analysis_problems` |
 
@@ -83,6 +83,8 @@ hidden: call them through `call(tool, arguments, database)`, as a `batch` op
 |---|---|
 | State | `get_version_state`, `get_version_history`, `list_checkouts` |
 | Edit and publish | `checkout_file`, `checkin_file`, `undo_checkout` (destructive) |
+| Repositories (no database) | `list_repositories`, `create_repository`, `list_repository_files` |
+| Share a local program | `add_to_repository` |
 
 ## Utility
 
