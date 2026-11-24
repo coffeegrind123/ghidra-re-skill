@@ -51,6 +51,10 @@ Read this when a tool behaves unexpectedly. Promote durable rules into SKILL.md.
 - **Similarity scores are per correlator.** Exact and symbol-name correlators give 1.0; the
   reference correlators give less even for unchanged code. Compare scores within one
   correlator, and use `view="best"` for the merged one-to-one pairs.
+- **A tool call that never returns**: restart the server with `GHIDRA_MCP_STALL_DUMP_S=<seconds>`
+  and `RE_MCP_LOG_DIR=<dir>`; a call running that long writes every Python and Java thread's
+  stack (with lock owners) to the worker's log. Do not use `jcmd` on a worker: the JVM prints
+  its dump on stdout, which is the MCP channel, and the worker is lost.
 - **Identical bodies cannot be told apart by body.** Two functions with the same code (two
   `*_end` cleanup routines) can be swapped by any body-based matcher, BSim included. Check
   names, callers or data references for such pairs.

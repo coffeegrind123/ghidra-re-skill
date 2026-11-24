@@ -309,7 +309,7 @@ Several databases can be open at once. To carry work from a documented build to 
   |---|---|---|---|
   | `fid_specific` (default) | 1.00 | 0.03-0.15 | unique hashes only |
   | `fuzzy` | 0.99-1.00 | 0.22-0.27 | adds similarity matches; review `score` |
-  | `vt` | 1.00 | 0.39-0.49 | Version Tracking: identical code and same-name pairs as seeds, then matches through matched callers, callees and data |
+  | `vt` | 1.00 | 0.46-0.53 | Version Tracking: identical code and same-name pairs as seeds, then matches through matched callers, callees and data |
   | `bsim` | 0.99 | 0.83-0.90 | same seeds, then BSim decompiler similarity (confidence >= 10); slow, decompiles both programs; review the pairs |
 
   `vt` and `bsim` open a Version Tracking session on the target, which clears the target's
