@@ -31,10 +31,38 @@ Read this when a tool behaves unexpectedly. Promote durable rules into SKILL.md.
   yourself. Java `byte` values are signed in Python: `b & 0xFF`.
 - **`execute` output caps**: stdout 64 KiB, result 256 KiB (`truncated` says so). Return
   counts and the first N items, not everything.
-- **`run_ghidra_script` has no time limit.** A running Java script cannot be interrupted; an
-  endless loop blocks that database until the server restarts.
+- **`run_ghidra_script(timeout_s=...)` stops a Python script at its next line, but a Java
+  script only where it checks the monitor** (`monitor.checkCancelled()` or a Ghidra API that
+  takes it). A Java loop that never checks runs on and blocks that database. A timeout rolls
+  the script's changes back.
 - **Nothing is on disk until `save_database`.** Batches, execute and scripts change the open
   program only. `close_database` saves by default.
+
+## Version Tracking
+
+- **Opening or closing a Version Tracking session clears the target's undo history.**
+  Ghidra joins the session to the program's transactions; `version_track`,
+  `auto_version_track` and `match_functions(algorithm="vt"|"bsim")` report
+  `undo_history_cleared`. Undo what you want undone first.
+- **While a session is open, one undo step covers the program and the session**: undoing an
+  apply reverts the copied markup and the accepted statuses together.
+- **The source is read as last saved.** Unsaved edits in the source database are invisible to
+  VT; `version_track` refuses (`UnsavedSource`) unless `save_source=true`.
+- **Similarity scores are per correlator.** Exact and symbol-name correlators give 1.0; the
+  reference correlators give less even for unchanged code. Compare scores within one
+  correlator, and use `view="best"` for the merged one-to-one pairs.
+- **Identical bodies cannot be told apart by body.** Two functions with the same code (two
+  `*_end` cleanup routines) can be swapped by any body-based matcher, BSim included. Check
+  names, callers or data references for such pairs.
+
+## Decompiler variable edits
+
+- **A wider type can silently delete a neighbouring stack variable** (measured, Ghidra 12.0):
+  retyping a 4-byte local to 8 bytes over its neighbour keeps the edit and removes the
+  neighbour. `edit_decompiler_variables` refuses with `EditDisplaced` unless
+  `allow_displace=true`; it reads every edit back and reports what did not hold.
+- **Decompiler storage strings are not unique** (two variables can both be `RBP:8`, several
+  flags `ZF:1`). Address variables by name, or by storage plus the first-use address.
 
 ## Types and prototypes
 

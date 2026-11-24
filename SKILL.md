@@ -300,12 +300,38 @@ function; `execute` for transitive walks (example above).
 ## Across Builds
 
 Several databases can be open at once. To carry work from a documented build to a new one:
-`match_functions(source_database, target_database)` first (read-only: it pairs functions
-whose hash is unique on both sides), then `propagate_documentation(...)` (names,
-prototypes, plate and line comments, labels, locals, and the data types they use; one undo
-step; `dry_run=true` to preview). For changed functions use `algorithm="fuzzy"` and review
-`score`. `diff_functions_across` shows what changed in a pair. Comments and labels copy
-only between bodies of identical layout.
+
+- `match_functions(source_database, target_database, algorithm=...)` pairs functions; one
+  pair per function on both sides, never many-to-one. Measured on two library version pairs
+  with debug-symbol truth (functions of 10+ instructions, precision / recall):
+
+  | algorithm | precision | recall | notes |
+  |---|---|---|---|
+  | `fid_specific` (default) | 1.00 | 0.03-0.15 | unique hashes only |
+  | `fuzzy` | 0.99-1.00 | 0.22-0.27 | adds similarity matches; review `score` |
+  | `vt` | 1.00 | 0.39-0.49 | Version Tracking: identical code and same-name pairs as seeds, then matches through matched callers, callees and data |
+  | `bsim` | 0.99 | 0.83-0.90 | same seeds, then BSim decompiler similarity (confidence >= 10); slow, decompiles both programs; review the pairs |
+
+  `vt` and `bsim` open a Version Tracking session on the target, which clears the target's
+  undo history (Ghidra joins the two undo stacks).
+- `propagate_documentation(...)` takes the same algorithms and copies names, prototypes,
+  plate and line comments, labels, locals and the data types they use; one undo step;
+  `dry_run=true` previews. Comments and labels copy only between bodies of identical layout.
+- Ghidra's own Version Tracking, for review and its markup rules:
+  `version_track(source_database, target_database, session_name)` correlates and returns the
+  best one-to-one matches; then on the target: `version_track_matches(session_name)`,
+  `apply_version_tracking(session_name, pairs=[{source, destination}], fields=[...])`
+  (accepts and copies markup; a pair VT never found becomes a manual match), and
+  `version_track_correlate(session_name, ["combined_reference"])` to find changed functions
+  next to accepted ones; repeat. Reference correlators find nothing until matches are
+  accepted. `auto_version_track` does it all with Ghidra's defaults, accepting and applying on
+  its own judgement. Each apply is one undo step that reverts the markup AND the match
+  statuses. VT reads the source's SAVED state (`save_source=true` saves it first). Sessions
+  are not saved: they end with `close_version_track` or when the target closes.
+- What changed: `diff_programs` ranks changed functions (code, callees, size); `diff_strings`
+  lists strings added or removed; `diff_functions_across(level="decompiled")` diffs one pair as
+  C with load addresses normalised, `level="instructions"` by instruction. A real code change
+  can leave the decompiled C identical (e.g. a patched dead branch): check instructions too.
 
 ## Ghidra Server
 
@@ -315,6 +341,9 @@ versions. `checkin_file(comment, keep_checked_out=true)` publishes a version.
 `get_version_history` and `list_checkouts` show history and holders. `undo_checkout` is
 destructive: it drops saved-but-not-checked-in work. Credentials come only from the server's
 environment (`GHIDRA_MCP_SERVER_USER` / `GHIDRA_MCP_SERVER_PASSWORD`), never tool arguments.
+Ghidra 12.2+ clients reject a server's self-issued TLS certificate: the server needs
+`GHIDRA_MCP_SERVER_CACERTS` (the certificate to trust), or `GHIDRA_MCP_SERVER_TRUST_LOOPBACK=1`
+for a server on 127.0.0.1 where every local account is trusted.
 
 Repositories (hidden tools: reach them with `call`; no database needed, several seconds each
 because they start a JVM): `list_repositories(server="host[:port]")`,
@@ -339,7 +368,10 @@ Errors are tool errors whose JSON carries `error_type`.
 | `TimeoutError` from execute | Ran past `timeout_s`; rolled back | Raise `timeout_s` (max 600) or split the work |
 | `ScriptError` / `SyntaxError` | Python or GhidraScript error; rolled back | Error carries the line and stdout so far |
 | `ReadOnly` on save | Server program not checked out | `checkout_file` |
-| `DecompilationFailed` | Decompiler gave up (60 s) | Read `disassemble_function`; check bounds with `list_function_ranges` |
+| `DecompilationFailed` | Decompiler gave up (`timeout_s`, default 60) | Raise `timeout_s`, or read `disassemble_function`; check bounds with `list_function_ranges` |
+| `EditDisplaced` from `edit_decompiler_variables` | A wider type would overlap (and Ghidra would silently delete) a neighbouring variable | Retype the neighbour first, or pass `allow_displace=true` deliberately |
+| `UnsavedSource` from `version_track` | VT reads the source's saved state | `save_database` on the source, or `save_source=true` |
+| A `NotFound` lists close names | A typo or a renamed symbol | Pick from the suggestions in the error |
 | `NotFound` renaming a variable | Name changed after a prototype edit, or a phantom | `list_decompiler_variables` again; skip phantoms |
 | `create_function` fails at a candidate | Shared epilogue or inside another body | Skip; the code belongs to a neighbour |
 | `get_function` finds nothing at an `nm` address | `.so`/PIE image base not added | Add `image_base` from `get_database_info`; verify on two known symbols |
@@ -356,8 +388,9 @@ Errors are tool errors whose JSON carries `error_type`.
 - Do NOT trust decompiler display types for storage: check `list_decompiler_variables` and set
   types explicitly.
 - Do NOT create functions in switch/jump tables: check `get_xrefs_to` and `get_switch_info`.
-- Do NOT run a long loop through `run_ghidra_script`: it cannot be interrupted. Use `execute`
-  with `timeout_s`.
+- Do NOT run a long loop through `run_ghidra_script`: a Java script is only stopped at its
+  `timeout_s` and checks for cancellation only where it calls the monitor. Use `execute` with
+  `timeout_s` for loops.
 - Analysis-created names (`FUN_`, `DAT_`, `LAB_`) are default names: any rename replaces them.
   `rename_symbol` renames or creates the label at an address, globals included.
 
